@@ -1,0 +1,12 @@
+// Cloudflare Workers (só ficheiros estáticos): serve a interface gerada em dist/.
+// Build: npm run build    Deploy: npx wrangler deploy
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "signed",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./dist",
+    // Qualquer rota desconhecida (ex.: /s/<token>, /documentos/<id>) devolve o index.html da aplicação React.
+    "not_found_handling": "single-page-application"
+  }
+}
