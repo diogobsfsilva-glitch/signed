@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import { InboxIcon, Logo, LogoutIcon, MenuIcon, PlusIcon, SettingsIcon, TemplateIcon } from "./ui";
@@ -7,6 +8,10 @@ export function Layout() {
   const { profile, signOut } = useAuth();
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
+  const [testMode, setTestMode] = useState(false);
+  useEffect(() => {
+    supabase.from("app_settings").select("test_mode").eq("id", 1).maybeSingle().then(({ data }) => setTestMode(!!data?.test_mode));
+  }, []);
 
   const link = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium ${isActive ? "bg-white/10 text-white" : "text-navy-100 hover:bg-white/5 hover:text-white"}`;
@@ -69,6 +74,11 @@ export function Layout() {
           </button>
           <Logo />
         </header>
+        {testMode && (
+          <div className="border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-center text-xs text-amber-900">
+            <strong>Modo de teste:</strong> os emails não são enviados. Abra o documento enviado, separador <em>Emails</em>, e reencaminhe o link e o código ao signatário.
+          </div>
+        )}
         <main className="min-w-0 flex-1 overflow-y-auto">
           <Outlet />
         </main>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthProvider";
 import { Alert, Logo, ShieldIcon, IdIcon, PenIcon } from "../components/ui";
@@ -11,6 +11,11 @@ export function Login() {
   const [busy, setBusy] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  // Modo de teste (definido na base de dados): login com email e palavra-passe antes do Microsoft 365.
+  const [testMode, setTestMode] = useState(false);
+  useEffect(() => {
+    supabase.rpc("login_options").then(({ data }) => setTestMode(!!(data as { test_mode?: boolean } | null)?.test_mode));
+  }, []);
 
   async function microsoft() {
     setBusy(true);
@@ -29,7 +34,7 @@ export function Login() {
     e.preventDefault();
     setBusy(true);
     const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) setError(error.message);
+    if (error) setError(error.message === "Invalid login credentials" ? "Email ou palavra-passe incorretos." : error.message);
     setBusy(false);
   }
 
@@ -86,9 +91,9 @@ export function Login() {
             Entrar com Microsoft
           </button>
 
-          {DEV && (
+          {(DEV || testMode) && (
             <form onSubmit={dev} className="mt-8 space-y-3 border-t border-slate-200 pt-6">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Desenvolvimento</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-400">{DEV ? "Desenvolvimento" : "Modo de teste"}</p>
               <input className="input" type="email" placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
               <input className="input" type="password" placeholder="palavra-passe" value={password} onChange={(e) => setPassword(e.target.value)} required />
               <button className="btn-primary w-full" disabled={busy}>

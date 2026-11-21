@@ -32,6 +32,8 @@ export function DocumentDetail() {
   const [recipients, setRecipients] = useState<RecipientRow[]>([]);
   const [events, setEvents] = useState<AuditEventRow[]>([]);
   const [emails, setEmails] = useState<EmailRow[]>([]);
+  // Modo de teste: texto dos emails não enviados (link e código), para reencaminhar à mão.
+  const [bodies, setBodies] = useState<Map<number, string>>(new Map());
   const [chainOk, setChainOk] = useState<boolean | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -41,12 +43,14 @@ export function DocumentDetail() {
   const load = useCallback(async () => {
     const { data: d } = await supabase.from("documents").select("*").eq("id", id!).maybeSingle();
     if (!d) return setMissing(true);
-    const [{ data: r }, { data: ev }, { data: em }, { data: ok }] = await Promise.all([
+    const [{ data: r }, { data: ev }, { data: em }, { data: ok }, { data: tb }] = await Promise.all([
       supabase.from("recipients").select(RECIPIENT_COLUMNS).eq("document_id", d.id).order("signing_order").order("created_at"),
       supabase.from("audit_events").select("*").eq("document_id", d.id).order("id"),
       supabase.from("email_log").select("id, to_email, subject, kind, status, error, created_at").eq("document_id", d.id).order("id", { ascending: false }),
       supabase.rpc("verify_audit_chain", { p_document_id: d.id }),
+      supabase.rpc("test_email_bodies", { p_document_id: d.id }),
     ]);
+    setBodies(new Map(((tb as { id: number; body_text: string | null }[] | null) ?? []).filter((x) => x.body_text).map((x) => [x.id, x.body_text!])));
     setDoc(d);
     setRecipients((r as unknown as RecipientRow[]) ?? []);
     setEvents(ev ?? []);
@@ -248,6 +252,7 @@ export function DocumentDetail() {
                       </span>
                     </p>
                     {m.error && <p className="text-xs text-red-700">{m.error.slice(0, 200)}</p>}
+                    {bodies.has(m.id) && <TestEmailBody text={bodies.get(m.id)!} />}
                   </li>
                 ))}
                 {emails.length === 0 && <li className="muted">Sem emails.</li>}
@@ -256,6 +261,36 @@ export function DocumentDetail() {
           </section>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Modo de teste: mostra o link e o código de um email que não foi enviado, para reencaminhar à mão. */
+function TestEmailBody({ text }: { text: string }) {
+  const link = /https?:\/\/\S+\/s\/[A-Za-z0-9_-]+/.exec(text)?.[0];
+  const code = /^\s*(\d{6})\s*$/m.exec(text)?.[1];
+  return (
+    <div className="mt-1.5 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+      {code && (
+        <p>
+          Código: <span className="select-all font-mono text-sm font-semibold tracking-widest">{code}</span>
+        </p>
+      )}
+      {link && (
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 truncate font-mono">{link}</span>
+          <button
+            className="shrink-0 rounded border border-amber-300 bg-white px-2 py-0.5 font-medium hover:bg-amber-100"
+            onClick={() => navigator.clipboard.writeText(link).then(() => toast("Link copiado."))}
+          >
+            Copiar link
+          </button>
+        </div>
+      )}
+      <details className="mt-1">
+        <summary className="cursor-pointer text-amber-700">Ver email completo</summary>
+        <p className="mt-1 whitespace-pre-wrap text-slate-700">{text}</p>
+      </details>
     </div>
   );
 }
