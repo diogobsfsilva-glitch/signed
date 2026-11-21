@@ -7,7 +7,7 @@ Componentes, todos em plano gratuito:
 | Serviço | Para quê | Limites do plano gratuito |
 |---|---|---|
 | Supabase (região Frankfurt) | Base de dados, ficheiros, login, funções | 500 MB de base de dados, 1 GB de ficheiros, sem backups, pausa após 7 dias sem uso |
-| Cloudflare Pages | Site (interface) | Uso comercial permitido, sem limite de tráfego estático |
+| Cloudflare Workers | Site (interface) | Uso comercial permitido, sem limite de tráfego estático |
 | Microsoft 365 da Altis | Login, emails, SharePoint, Word→PDF | Já pago pela Altis |
 
 ---
@@ -87,15 +87,13 @@ Segunda aplicação (ou a mesma), **App registrations → New registration**, `S
 
 O arquivo fica em `Signed/<ano>/<espaço de trabalho>/<título>_<id>/`.
 
-## 5. Cloudflare Pages (interface)
+## 5. Cloudflare Workers (interface)
 
-1. dash.cloudflare.com → **Workers & Pages → Create → Pages → Connect to Git** e escolher `diogobsfsilva-glitch/signed`.
-2. Build command: `npm run build`. Output: `dist`.
-3. Variáveis de ambiente:
-   - `VITE_SUPABASE_URL` = `https://<PROJECT_REF>.supabase.co`
-   - `VITE_SUPABASE_ANON_KEY` = a chave pública (*publishable/anon*) do Supabase (Project Settings → API)
-   - **não** definir `VITE_DEV_LOGIN`
-4. Opcional: domínio próprio, por exemplo `signed.altishotels.com` (atualizar `APP_URL` e o Site URL do Supabase).
+1. dash.cloudflare.com → **Workers & Pages → Create → Import a repository** e escolher `diogobsfsilva-glitch/signed`.
+2. Build command: `npm run build`. Deploy command: `npx wrangler deploy` (lê `wrangler.jsonc`). Desligar *Preview builds*. Não ativar *Cloudflare Access* (os signatários externos têm de abrir os links).
+3. Variáveis: não são precisas. O endereço e a chave pública do Supabase estão em `.env.production`, no repositório. **Não** definir `VITE_DEV_LOGIN`.
+4. Endereço atual: `https://signed.diogobsfsilva.workers.dev` (é o `APP_URL` das funções e o Site URL do Supabase).
+5. Opcional: domínio próprio, por exemplo `signed.altishotels.com` (atualizar `APP_URL` e o Site URL do Supabase).
 
 Cada `git push` para `main` publica automaticamente.
 
