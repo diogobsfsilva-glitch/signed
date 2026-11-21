@@ -50,6 +50,7 @@ export function Dashboard() {
       supabase
         .from("documents")
         .select("id, title, status, signature_mode, updated_at, sent_at, owner_id, folder_id, workspace_id, recipients(name, role, status), owner:profiles!documents_owner_id_fkey(full_name, email)")
+        .eq("is_template", false)
         .order("updated_at", { ascending: false })
         .limit(500),
       supabase.from("folders").select("id, name, workspace_id").order("name"),

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase, BUCKET } from "../lib/supabase";
 import { useAuth } from "../auth/AuthProvider";
 import { convertDocx } from "../lib/api";
@@ -12,6 +12,8 @@ const MAX = 25 * 1024 * 1024;
 export function NewDocument() {
   const { profile, workspaces } = useAuth();
   const nav = useNavigate();
+  const [params] = useSearchParams();
+  const asTemplate = params.get("modelo") === "1";
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [ws, setWs] = useState(workspaces[0]?.id ?? "");
@@ -45,7 +47,7 @@ export function NewDocument() {
       setBusy("A criar o documento…");
       const { data: doc, error } = await supabase
         .from("documents")
-        .insert({ title: title.trim(), workspace_id: ws, folder_id: folder || null, owner_id: profile.id })
+        .insert({ title: title.trim(), workspace_id: ws, folder_id: folder || null, owner_id: profile.id, is_template: asTemplate })
         .select("id, workspace_id")
         .single();
       if (error) throw error;
@@ -94,8 +96,12 @@ export function NewDocument() {
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6 lg:py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">Novo documento</h1>
-      <p className="muted mt-1">Carregue o documento. A seguir indica quem assina e onde.</p>
+      <h1 className="text-2xl font-semibold tracking-tight">{asTemplate ? "Novo modelo" : "Novo documento"}</h1>
+      <p className="muted mt-1">
+        {asTemplate
+          ? "Carregue o documento base. A seguir indica os papéis de quem assina (ex.: Colaborador, Diretor do hotel) e onde."
+          : "Carregue o documento. A seguir indica quem assina e onde."}
+      </p>
 
       <div className="card mt-6 p-5 sm:p-6">
         <label
@@ -129,7 +135,7 @@ export function NewDocument() {
         <div className="mt-5 space-y-4">
           <div>
             <label className="label" htmlFor="title">Título</label>
-            <input id="title" className="input" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} placeholder="Ex.: Contrato de fornecimento — Lavandaria" />
+            <input id="title" className="input" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} placeholder={asTemplate ? "Ex.: Contrato de trabalho a termo" : "Ex.: Contrato de fornecimento — Lavandaria"} />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             {workspaces.length > 1 && (

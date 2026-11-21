@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { supabase, BUCKET } from "../lib/supabase";
 import { documentAction } from "../lib/api";
+import { instantiate } from "../lib/templates";
 import type { AuditEventRow, DocumentRow, RecipientRow } from "../../supabase/functions/_shared/types";
 import { EVENT_LABELS } from "../../supabase/functions/_shared/types";
 import { Alert, CheckIcon, DownloadIcon, FullPageSpinner, IdIcon, ModeBadge, RecipientBadge, ShieldIcon, StatusBadge, toast } from "../components/ui";
@@ -26,6 +27,7 @@ interface EmailRow {
 export function DocumentDetail() {
   const { id } = useParams();
   const { profile } = useAuth();
+  const nav = useNavigate();
   const [doc, setDoc] = useState<DocumentRow | null>(null);
   const [recipients, setRecipients] = useState<RecipientRow[]>([]);
   const [events, setEvents] = useState<AuditEventRow[]>([]);
@@ -123,6 +125,27 @@ export function DocumentDetail() {
             </>
           )}
           <button className="btn-ghost" onClick={() => download(doc.original_path, `${base}_original.pdf`)}>Original</button>
+          {doc.original_path && (
+            <button
+              className="btn-ghost"
+              disabled={busy}
+              onClick={async () => {
+                const name = prompt("Nome do modelo (usa o PDF original, os destinatários e os campos deste documento):", doc.title);
+                if (!name?.trim()) return;
+                setBusy(true);
+                try {
+                  const tid = await instantiate({ sourceId: doc.id, sourcePath: doc.original_path!, asTemplate: true, title: name.trim(), workspaceId: doc.workspace_id });
+                  toast("Modelo criado. Ajuste os papéis (ex.: Colaborador) e conclua.");
+                  nav(`/documentos/${tid}/editar`);
+                } catch (e) {
+                  toast(errorMessage(e), "error");
+                  setBusy(false);
+                }
+              }}
+            >
+              Guardar como modelo
+            </button>
+          )}
         </div>
       </div>
 

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase, BUCKET } from "../lib/supabase";
 import { documentAction } from "../lib/api";
+import { instantiate } from "../lib/templates";
 import type { DocumentRow, FieldRow, FieldType, RecipientRow } from "../../supabase/functions/_shared/types";
 import { FIELD_LABELS } from "../../supabase/functions/_shared/types";
 import { validateForSend } from "../../supabase/functions/_shared/workflow";
@@ -19,6 +20,7 @@ const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 export function Editor() {
   const { id } = useParams();
   const nav = useNavigate();
+  const [params] = useSearchParams();
   const [doc, setDoc] = useState<DocumentRow | null>(null);
   const [recipients, setRecipients] = useState<R[]>([]);
   const [fields, setFields] = useState<F[]>([]);
@@ -58,7 +60,9 @@ export function Editor() {
       setPdfUrl(url?.signedUrl ?? null);
       setActiveRecipient(r?.find((x) => x.role === "signer")?.id ?? null);
       if (r && r.length) setTab("fields");
+      if (params.get("rever") === "1" && !d.is_template) setReview(true);
     })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, nav]);
 
   const signers = useMemo(() => recipients.filter((r) => r.role === "signer"), [recipients]);
@@ -213,6 +217,20 @@ export function Editor() {
 
   if (notFound) return <div className="p-8"><Alert>Documento não encontrado.</Alert></div>;
   if (!doc) return <FullPageSpinner />;
+  const isTemplate = doc.is_template;
+  const home = isTemplate ? "/modelos" : "/";
+
+  async function saveAsTemplate() {
+    const name = prompt("Nome do modelo:", doc!.title);
+    if (!name?.trim()) return;
+    try {
+      const tid = await instantiate({ sourceId: doc!.id, sourcePath: doc!.original_path!, asTemplate: true, title: name.trim(), workspaceId: doc!.workspace_id });
+      toast("Modelo criado. Pode ajustar os papéis e os campos.");
+      nav(`/documentos/${tid}/editar`);
+    } catch (e) {
+      toast(errorMessage(e), "error");
+    }
+  }
 
   const issues = validateForSend(doc, recipients, fields.map((f) => ({ ...f })));
   const palette: FieldType[] = doc.signature_mode === "qualified"
@@ -223,7 +241,8 @@ export function Editor() {
     <div className="flex h-full flex-col">
       {/* Barra superior */}
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
-        <Link to="/" className="btn-ghost px-2" aria-label="Voltar">←</Link>
+        <Link to={home} className="btn-ghost px-2" aria-label="Voltar">←</Link>
+        {isTemplate && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Modelo</span>}
         <input
           className="min-w-0 flex-1 rounded-md border border-transparent px-2 py-1 text-base font-semibold hover:border-slate-200 focus:border-navy-500 focus:outline-none"
           value={doc.title}
@@ -236,15 +255,22 @@ export function Editor() {
         <button
           className="btn-ghost text-red-700"
           onClick={async () => {
-            if (!confirm("Apagar este rascunho?")) return;
+            if (!confirm(isTemplate ? "Apagar este modelo? Os documentos já criados a partir dele não são afetados." : "Apagar este rascunho?")) return;
             const { error } = await supabase.rpc("delete_draft_document", { p_document_id: doc.id });
             if (error) toast(errorMessage(error), "error");
-            else nav("/");
+            else nav(home);
           }}
         >
           Apagar
         </button>
-        <button className="btn-primary" onClick={() => setReview(true)}>Rever e enviar</button>
+        {isTemplate ? (
+          <Link to="/modelos" className="btn-primary">Concluído</Link>
+        ) : (
+          <>
+            <button className="btn-ghost hidden sm:inline-flex" onClick={saveAsTemplate} disabled={!doc.original_path}>Guardar como modelo</button>
+            <button className="btn-primary" onClick={() => setReview(true)}>Rever e enviar</button>
+          </>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -410,6 +436,7 @@ function RecipientsPanel({
 }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const tpl = doc.is_template;
   const [role, setRole] = useState<"signer" | "cc">("signer");
   const [civil, setCivil] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -427,7 +454,7 @@ function RecipientsPanel({
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{r.name}</p>
-                <p className="truncate text-xs text-slate-500">{r.email}</p>
+                <p className="truncate text-xs text-slate-500">{r.email || (tpl ? "Email indicado ao usar o modelo" : "Sem email")}</p>
                 <div className="mt-1.5 flex flex-wrap items-center gap-2">
                   <select className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs" value={r.role} onChange={(e) => onUpdate(r.id, { role: e.target.value as "signer" | "cc" })} aria-label="Papel">
                     <option value="signer">Assina</option>
@@ -464,7 +491,7 @@ function RecipientsPanel({
         onSubmit={async (e) => {
           e.preventDefault();
           setErr(null);
-          if (recipients.some((r) => r.email === email.trim().toLowerCase())) return setErr("Esse email já está na lista.");
+          if (email.trim() && recipients.some((r) => r.email === email.trim().toLowerCase())) return setErr("Esse email já está na lista.");
           const c = civil.replace(/\D/g, "");
           if (c && (c.length < 6 || c.length > 9)) return setErr("O nº de identificação civil tem entre 6 e 9 dígitos.");
           await onAdd({ name, email, role, civil_id: c || null });
@@ -473,9 +500,10 @@ function RecipientsPanel({
           setCivil("");
         }}
       >
-        <p className="text-sm font-medium">Adicionar destinatário</p>
-        <input className="input" placeholder="Nome completo" value={name} onChange={(e) => setName(e.target.value)} required maxLength={200} />
-        <input className="input" type="email" placeholder="email@exemplo.pt" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        <p className="text-sm font-medium">{tpl ? "Adicionar papel" : "Adicionar destinatário"}</p>
+        {tpl && <p className="text-xs text-slate-500">Indique o papel (ex.: Colaborador, Diretor do hotel). O nome e o email pedem-se ao usar o modelo; preencha o email só se for sempre a mesma pessoa.</p>}
+        <input className="input" placeholder={tpl ? "Papel (ex.: Colaborador)" : "Nome completo"} value={name} onChange={(e) => setName(e.target.value)} required maxLength={200} />
+        <input className="input" type="email" placeholder={tpl ? "Email (opcional)" : "email@exemplo.pt"} value={email} onChange={(e) => setEmail(e.target.value)} required={!tpl} />
         <div className="flex gap-2">
           <select className="input" value={role} onChange={(e) => setRole(e.target.value as "signer" | "cc")} aria-label="Papel">
             <option value="signer">Assina</option>
@@ -571,10 +599,10 @@ function SettingsPanel({ doc, onPatch, hasInitials }: { doc: DocumentRow; onPatc
       </label>
 
       <div className="grid grid-cols-2 gap-3">
-        <div>
+        {!doc.is_template && <div>
           <label className="label" htmlFor="exp">Prazo (opcional)</label>
           <input id="exp" type="date" className="input" min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)} value={toLocal(doc.expires_at)} onChange={(e) => onPatch({ expires_at: e.target.value ? new Date(`${e.target.value}T23:59:00`).toISOString() : null })} />
-        </div>
+        </div>}
         <div>
           <label className="label" htmlFor="rem">Lembretes</label>
           <select id="rem" className="input" value={doc.reminder_days} onChange={(e) => onPatch({ reminder_days: Number(e.target.value) })}>

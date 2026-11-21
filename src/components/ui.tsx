@@ -150,6 +150,7 @@ const S = (p: IP & { children: ReactNode }) => (
 export const DocIcon = (p: IP) => <S {...p}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5M9 13h6M9 17h4" /></S>;
 export const IdIcon = (p: IP) => <S {...p}><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="11" r="2" /><path d="M6.5 16c.6-1.4 1.6-2 2.5-2s1.9.6 2.5 2M14 10h4M14 13h3" /></S>;
 export const PenIcon = (p: IP) => <S {...p}><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></S>;
+export const TemplateIcon = (p: IP) => <S {...p}><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 7h8M8 11h8M8 15h4" /><path d="M15 15l1.5 1.5L19 14" /></S>;
 export const PlusIcon = (p: IP) => <S {...p}><path d="M12 5v14M5 12h14" /></S>;
 export const FolderIcon = (p: IP) => <S {...p}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></S>;
 export const InboxIcon = (p: IP) => <S {...p}><path d="M4 13l2-8h12l2 8v6H4z" /><path d="M4 13h5l1 2h4l1-2h5" /></S>;

@@ -129,5 +129,5 @@ CRON_SECRET=dev-cron-secret-change-me
 PUBLIC_API_URL=http://127.0.0.1:54321
 SEAL_CERT_PEM="<conteúdo de tests/fixtures/pki/seal.pem com \n>"
 SEAL_KEY_PEM="<conteúdo de tests/fixtures/pki/seal.p8 com \n>"
-SIGNED_DEV_EXTRA_TRUST_PEM="<root.pem + cc008.pem + sigca.pem da PKI de teste>"
+SIGNED_DEV_EXTRA_TRUST_PEM="<root.pem + cc008.pem + sigca.pem + cc008ec.pem da PKI de teste>"
 ```

@@ -60,17 +60,22 @@ export interface ValidationIssue {
 
 /** Validações antes de enviar. */
 export function validateForSend(
-  doc: WorkflowDoc & { original_path: string | null },
+  doc: WorkflowDoc & { original_path: string | null; is_template?: boolean },
   recipients: (R & { name: string; email: string })[],
   fields: (F & { id: string; options: string[] | null })[],
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
+  if (doc.is_template) issues.push({ message: "Um modelo não pode ser enviado. Use-o para criar um documento." });
   if (!doc.original_path) issues.push({ message: "Falta carregar o documento PDF." });
   const signers = recipients.filter((r) => r.role === "signer");
   if (signers.length === 0) issues.push({ message: "Adicione pelo menos um signatário." });
   const emails = new Set<string>();
   for (const r of recipients) {
     const e = r.email.trim().toLowerCase();
+    if (!e) {
+      issues.push({ message: `Falta o email de ${r.name}.` });
+      continue;
+    }
     if (emails.has(e)) issues.push({ message: `O email ${r.email} aparece repetido.` });
     emails.add(e);
   }

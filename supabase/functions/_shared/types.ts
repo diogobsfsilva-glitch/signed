@@ -13,6 +13,8 @@ export interface DocumentRow {
   folder_id: string | null;
   owner_id: string;
   title: string;
+  /** Modelo: fica sempre em rascunho e é copiado para documentos novos. */
+  is_template: boolean;
   status: DocStatus;
   signature_mode: SignatureMode;
   phase: DocPhase;
@@ -141,6 +143,8 @@ export const RECIPIENT_STATUS_LABELS: Record<RecipientStatus, string> = {
 
 export const EVENT_LABELS: Record<string, string> = {
   "document.created": "Documento criado",
+  "document.created_from_template": "Criado a partir de um modelo",
+  "template.created_from_document": "Modelo criado a partir de um documento",
   "document.sent": "Documento enviado",
   "document.cancelled": "Documento cancelado",
   "document.prepared": "PDF preparado para assinatura qualificada",

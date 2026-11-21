@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
-import { InboxIcon, Logo, LogoutIcon, MenuIcon, PlusIcon, SettingsIcon } from "./ui";
+import { InboxIcon, Logo, LogoutIcon, MenuIcon, PlusIcon, SettingsIcon, TemplateIcon } from "./ui";
 
 export function Layout() {
   const { profile, signOut } = useAuth();
@@ -29,6 +29,9 @@ export function Layout() {
       <nav className="flex flex-col gap-1" onClick={() => setOpen(false)}>
         <NavLink to="/" end className={link}>
           <InboxIcon className="h-4.5 w-4.5" /> Documentos
+        </NavLink>
+        <NavLink to="/modelos" className={link}>
+          <TemplateIcon className="h-4.5 w-4.5" /> Modelos
         </NavLink>
         {profile?.role === "admin" && (
           <NavLink to="/admin" className={link}>

@@ -12,6 +12,7 @@ import { Editor } from "./pages/Editor";
 import { DocumentDetail } from "./pages/DocumentDetail";
 import { Admin } from "./pages/Admin";
 import { Sign } from "./pages/Sign";
+import { Templates } from "./pages/Templates";
 
 function Protected() {
   const { loading, session, profile } = useAuth();
@@ -40,6 +41,7 @@ createRoot(document.getElementById("root")!).render(
                 <Route element={<Protected />}>
                   <Route index element={<Dashboard />} />
                   <Route path="novo" element={<NewDocument />} />
+                  <Route path="modelos" element={<Templates />} />
                   <Route path="documentos/:id/editar" element={<Editor />} />
                   <Route path="documentos/:id" element={<DocumentDetail />} />
                   <Route

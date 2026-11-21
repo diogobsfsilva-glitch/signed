@@ -18,6 +18,7 @@ O plano completo, com as fases seguintes, está em [docs/PLANO.md](docs/PLANO.md
 | Cartão de Cidadão | Preenchimento na web, depois descarregar, assinar na app Autenticação.gov e carregar. Validação da cadeia ECRaizEstado, da integridade e da identidade (nome ou nº de identificação civil) |
 | Prova | Registo de auditoria encadeado por hashes (inalterável), certificado de conclusão em PDF, selo PAdES da plataforma, SHA-256 do original e do final |
 | Conclusão | Email a todos com o PDF final e o certificado, arquivo automático no SharePoint |
+| Modelos (Fase 2) | Modelos partilhados no espaço de trabalho com o PDF, os papéis (ex.: Colaborador, Diretor do hotel) e os campos. Usar um modelo pede só nomes e emails. Qualquer documento pode ser guardado como modelo |
 | Administração | Espaços de trabalho, membros e funções, utilizadores, domínios autorizados, login com Microsoft 365 |
 
 ## Arquitetura
