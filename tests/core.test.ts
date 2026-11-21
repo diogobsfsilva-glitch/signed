@@ -1,0 +1,297 @@
+import { describe, expect, it } from "vitest";
+import { PDFDocument, StandardFonts, degrees } from "pdf-lib";
+import * as pkijs from "pkijs";
+import {
+  findSignatures,
+  matchSigner,
+  parseCertificate,
+  PT_CC_POLICY,
+  type TrustStore,
+  verifyIncrementalQualifiedSignature,
+} from "../supabase/functions/_shared/pades-verify.ts";
+import { loadSealKey, sealPdf } from "../supabase/functions/_shared/pades-sign.ts";
+import { flattenFields, pageGeom, placeField, readPages, assertValidPdf } from "../supabase/functions/_shared/pdf.ts";
+import { buildAuditCertificate } from "../supabase/functions/_shared/audit-cert.ts";
+import { PT_INTERMEDIATES, PT_TRUST_ANCHORS } from "../supabase/functions/_shared/trust-pt.ts";
+import { trustStoreFromBase64 } from "../supabase/functions/_shared/pades-verify.ts";
+import { currentRecipients, fillPhaseDone, validateFieldValues, validateForSend } from "../supabase/functions/_shared/workflow.ts";
+import { nameMatches, sha256Hex, fromBase64 } from "../supabase/functions/_shared/util.ts";
+import { appendIncrementalSignature, testKey, testPem } from "./helpers/incremental.ts";
+
+const PNG_1x1 =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+async function samplePdf(rotate = 0): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (let i = 0; i < 2; i++) {
+    const p = doc.addPage([595.28, 841.89]);
+    p.drawText(`Contrato de teste — página ${i + 1}`, { x: 50, y: 780, size: 14, font });
+    if (rotate) p.setRotation(degrees(rotate));
+  }
+  return doc.save({ useObjectStreams: false });
+}
+
+function testTrust(): TrustStore {
+  return {
+    anchors: [parseCertificate(pemToDer(testPem("root")))],
+    intermediates: [parseCertificate(pemToDer(testPem("cc008"))), parseCertificate(pemToDer(testPem("sigca"))), parseCertificate(pemToDer(testPem("authca")))],
+  };
+}
+function pemToDer(pem: string) {
+  return fromBase64(pem.replace(/-----[^-]+-----/g, ""));
+}
+
+describe("geometria", () => {
+  it("converte coordenadas relativas para PDF sem rotação", async () => {
+    const doc = await PDFDocument.load(await samplePdf());
+    const g = pageGeom(doc.getPage(0));
+    const p = placeField(g, { x: 0.1, y: 0.1, w: 0.2, h: 0.05 });
+    expect(p.rotate).toBe(0);
+    expect(p.ox).toBeCloseTo(59.528, 2);
+    expect(p.oy).toBeCloseTo(841.89 * 0.85, 2);
+    expect(p.bw).toBeCloseTo(119.056, 2);
+  });
+
+  it("trata páginas rodadas 90º (dimensões vistas trocadas)", async () => {
+    const bytes = await samplePdf(90);
+    const info = await readPages(bytes);
+    expect(info.pages[0].w).toBeCloseTo(841.89, 1);
+    const doc = await PDFDocument.load(bytes);
+    const p = placeField(pageGeom(doc.getPage(0)), { x: 0, y: 0, w: 0.1, h: 0.1 });
+    // canto inferior-esquerdo da caixa vista = (v=0.1*595, u=0) em PDF
+    expect(p.ox).toBeCloseTo(59.528, 2);
+    expect(p.oy).toBeCloseTo(0, 2);
+    expect(p.rotate).toBe(90);
+  });
+});
+
+describe("achatar campos", () => {
+  it("escreve todos os tipos de campo sem erros, incluindo acentos e emojis", async () => {
+    const out = await flattenFields(
+      await samplePdf(),
+      [
+        { id: "1", recipient_id: "r", type: "signature", page: 1, x: 0.1, y: 0.5, w: 0.3, h: 0.08, value: PNG_1x1, options: null, label: null },
+        { id: "2", recipient_id: "r", type: "text", page: 1, x: 0.1, y: 0.6, w: 0.3, h: 0.03, value: "João Conceição ✓ 😀", options: null, label: null },
+        { id: "3", recipient_id: "r", type: "date", page: 2, x: 0.1, y: 0.6, w: 0.2, h: 0.03, value: "2026-11-21", options: null, label: null },
+        { id: "4", recipient_id: "r", type: "checkbox", page: 2, x: 0.1, y: 0.7, w: 0.03, h: 0.02, value: "true", options: null, label: null },
+        { id: "5", recipient_id: "r", type: "radio", page: 2, x: 0.5, y: 0.7, w: 0.3, h: 0.06, value: "Sim", options: ["Sim", "Não"], label: null },
+        { id: "6", recipient_id: "r", type: "dropdown", page: 2, x: 0.5, y: 0.8, w: 0.3, h: 0.03, value: "Lisboa", options: ["Lisboa", "Porto"], label: null },
+      ],
+      { mode: "simple" },
+    );
+    expect(await assertValidPdf(out)).toBe(2);
+  });
+
+  it("modo CC: desenha marcadores de assinatura com o nome", async () => {
+    const out = await flattenFields(
+      await samplePdf(90),
+      [{ id: "1", recipient_id: "r1", type: "signature", page: 1, x: 0.5, y: 0.8, w: 0.35, h: 0.08, value: null, options: null, label: null }],
+      { mode: "qualified", qualifiedPlaceholders: true, recipients: [{ id: "r1", name: "Maria Fernandes Silva" }] },
+    );
+    expect(await assertValidPdf(out)).toBe(2);
+  });
+
+  it("recusa ficheiros que não são PDF", async () => {
+    await expect(assertValidPdf(new TextEncoder().encode("olá"))).rejects.toThrow("não é um PDF");
+  });
+});
+
+describe("selo da plataforma", () => {
+  it("assina o PDF e a assinatura é válida e cobre o ficheiro todo", async () => {
+    const key = await loadSealKey(testPem("seal"), (await import("node:fs")).readFileSync(new URL("./fixtures/pki/seal.p8", import.meta.url), "utf8"));
+    const sealed = await sealPdf(await samplePdf(), key, { reason: "Teste", name: "Signed" });
+    const sigs = findSignatures(sealed);
+    expect(sigs).toHaveLength(1);
+    const [, , c, d] = sigs[0].byteRange;
+    expect(c + d).toBe(sealed.length);
+    expect(sigs[0].subFilter).toBe("ETSI.CAdES.detached");
+    // Verifica com pkijs
+    const asn = (await import("asn1js")).fromBER(sigs[0].contents.slice().buffer);
+    const sd = new pkijs.SignedData({ schema: new pkijs.ContentInfo({ schema: asn.result }).content });
+    const [, b] = sigs[0].byteRange;
+    const data = new Uint8Array([...sealed.subarray(0, b), ...sealed.subarray(c)]);
+    const res = await sd.verify({ signer: 0, data: data.buffer, extendedMode: true });
+    expect(res.signatureVerified).toBe(true);
+  });
+});
+
+describe("validação de assinatura com Cartão de Cidadão", () => {
+  const trust = testTrust();
+
+  it("aceita uma assinatura qualificada válida e extrai os dados do titular", async () => {
+    const prepared = await samplePdf();
+    const signed = await appendIncrementalSignature(prepared, await testKey("maria", ["sigca", "cc008"]));
+    const r = await verifyIncrementalQualifiedSignature(prepared, signed, { trust });
+    expect(r.signer.commonName).toBe("Maria Fernandes Silva");
+    expect(r.signer.serialNumberAttr).toBe("BI123456780");
+    expect(r.signer.issuerCommonName).toMatch(PT_CC_POLICY.signerIssuerCn);
+    expect(r.chain.map((c) => c.commonName)).toContain("Cartão de Cidadão 008");
+    expect(r.newSha256).toBe(await sha256Hex(signed));
+  });
+
+  it("aceita assinaturas sucessivas (2.º signatário sobre o PDF já assinado)", async () => {
+    const prepared = await samplePdf();
+    const s1 = await appendIncrementalSignature(prepared, await testKey("maria", ["sigca", "cc008"]));
+    const s2 = await appendIncrementalSignature(s1, await testKey("joao", ["sigca", "cc008"]));
+    const r = await verifyIncrementalQualifiedSignature(s1, s2, { trust });
+    expect(r.signer.commonName).toBe("João Pedro Costa");
+    expect(findSignatures(s2)).toHaveLength(2);
+  });
+
+  it("aceita cadeia não incluída na assinatura (usa as CAs conhecidas)", async () => {
+    const prepared = await samplePdf();
+    const signed = await appendIncrementalSignature(prepared, await testKey("maria"));
+    await expect(verifyIncrementalQualifiedSignature(prepared, signed, { trust })).resolves.toBeTruthy();
+  });
+
+  it("recusa um cartão falso (cadeia com outra raiz, mesmos nomes)", async () => {
+    const prepared = await samplePdf();
+    const signed = await appendIncrementalSignature(prepared, await testKey("rogue", ["rogue_sigca", "rogue_cc", "rogue_root"]));
+    await expect(verifyIncrementalQualifiedSignature(prepared, signed, { trust })).rejects.toMatchObject({ code: "untrusted" });
+  });
+
+  it("recusa o certificado de autenticação do cartão", async () => {
+    const prepared = await samplePdf();
+    const signed = await appendIncrementalSignature(prepared, await testKey("maria_auth", ["authca", "cc008"]));
+    await expect(verifyIncrementalQualifiedSignature(prepared, signed, { trust })).rejects.toMatchObject({ code: "not_signature_cert" });
+  });
+
+  it("recusa um PDF que não começa pelos bytes do documento enviado", async () => {
+    const prepared = await samplePdf();
+    const other = await samplePdf(90);
+    const signed = await appendIncrementalSignature(other, await testKey("maria", ["sigca", "cc008"]));
+    await expect(verifyIncrementalQualifiedSignature(prepared, signed, { trust })).rejects.toMatchObject({ code: "not_incremental" });
+  });
+
+  it("recusa conteúdo alterado depois de assinar", async () => {
+    const prepared = await samplePdf();
+    const signed = await appendIncrementalSignature(prepared, await testKey("maria", ["sigca", "cc008"]));
+    const tampered = new Uint8Array([...signed, ...new TextEncoder().encode("\n1 0 obj << /Evil true >> endobj\n")]);
+    await expect(verifyIncrementalQualifiedSignature(prepared, tampered, { trust })).rejects.toMatchObject({ code: "trailing_data" });
+  });
+
+  it("recusa bytes alterados dentro da zona assinada", async () => {
+    const prepared = await samplePdf();
+    const signed = await appendIncrementalSignature(prepared, await testKey("maria", ["sigca", "cc008"]));
+    const tampered = signed.slice();
+    // altera um byte da parte nova (zona assinada), fora do Contents
+    const idx = tampered.length - 20;
+    tampered[idx] = tampered[idx] === 0x30 ? 0x31 : 0x30;
+    await expect(verifyIncrementalQualifiedSignature(prepared, tampered, { trust })).rejects.toBeTruthy();
+  });
+
+  it("recusa upload sem assinatura nova", async () => {
+    const prepared = await samplePdf();
+    const same = new Uint8Array([...prepared, 0x0a]);
+    await expect(verifyIncrementalQualifiedSignature(prepared, same, { trust })).rejects.toMatchObject({ code: "no_signature" });
+  });
+
+  it("valida o titular por nº de identificação civil ou nome", () => {
+    const cert = { commonName: "Maria Fernandes Silva", givenName: "Maria", surname: "Fernandes Silva", serialNumberAttr: "BI123456780" } as never;
+    expect(matchSigner(cert, { name: "Maria Silva", civil_id: null }, nameMatches).ok).toBe(true);
+    expect(matchSigner(cert, { name: "Ana Silva", civil_id: null }, nameMatches).ok).toBe(false);
+    expect(matchSigner(cert, { name: "Outra", civil_id: "12345678" }, nameMatches).ok).toBe(true);
+    expect(matchSigner(cert, { name: "Maria Silva", civil_id: "99999999" }, nameMatches).ok).toBe(false);
+  });
+
+  it("carrega os certificados reais do Estado português", () => {
+    const real = trustStoreFromBase64(PT_TRUST_ANCHORS, PT_INTERMEDIATES);
+    expect(real.anchors.length).toBe(2);
+    const cns = real.intermediates.map((c) => c.subject.typesAndValues.find((t) => t.type === "2.5.4.3")!.value.valueBlock.value);
+    expect(cns).toContain("EC de Assinatura Digital Qualificada do Cartão de Cidadão 0020");
+    expect(cns.filter((n: string) => PT_CC_POLICY.requiredIntermediateCn.test(n)).length).toBe(6);
+  });
+
+  it("um certificado de teste não passa na cadeia real", async () => {
+    const real = trustStoreFromBase64(PT_TRUST_ANCHORS, PT_INTERMEDIATES);
+    const prepared = await samplePdf();
+    const signed = await appendIncrementalSignature(prepared, await testKey("maria", ["sigca", "cc008"]));
+    await expect(verifyIncrementalQualifiedSignature(prepared, signed, { trust: real })).rejects.toMatchObject({ code: "untrusted" });
+  });
+});
+
+describe("fluxo", () => {
+  const recips = [
+    { id: "a", role: "signer" as const, signing_order: 1, status: "notified" as const },
+    { id: "b", role: "signer" as const, signing_order: 2, status: "pending" as const },
+    { id: "c", role: "cc" as const, signing_order: 1, status: "pending" as const },
+  ];
+  it("sequencial: só o primeiro", () => {
+    const cur = currentRecipients({ signature_mode: "simple", phase: "fill", sequential: true }, recips, []);
+    expect(cur.map((r) => r.id)).toEqual(["a"]);
+  });
+  it("paralelo: todos os signatários", () => {
+    const cur = currentRecipients({ signature_mode: "simple", phase: "fill", sequential: false }, recips, []);
+    expect(cur.map((r) => r.id)).toEqual(["a", "b"]);
+  });
+  it("modo CC: fase de preenchimento só inclui quem tem campos a preencher", () => {
+    const fields = [
+      { recipient_id: "b", type: "text" as const },
+      { recipient_id: "a", type: "signature" as const },
+    ];
+    const doc = { signature_mode: "qualified" as const, phase: "fill" as const, sequential: true };
+    expect(currentRecipients(doc, recips, fields).map((r) => r.id)).toEqual(["b"]);
+    expect(fillPhaseDone(doc, recips, fields)).toBe(false);
+    expect(fillPhaseDone(doc, recips.map((r) => (r.id === "b" ? { ...r, status: "filled" as const } : r)), fields)).toBe(true);
+  });
+  it("modo CC: assinatura é sempre um de cada vez", () => {
+    const doc = { signature_mode: "qualified" as const, phase: "sign" as const, sequential: false };
+    expect(currentRecipients(doc, recips, [])).toHaveLength(1);
+  });
+  it("valida antes de enviar", () => {
+    const issues = validateForSend(
+      { signature_mode: "qualified", phase: "fill", sequential: true, original_path: "x" },
+      [{ id: "a", role: "signer", signing_order: 1, status: "pending", name: "Ana", email: "a@x.pt" }],
+      [{ id: "f", recipient_id: "a", type: "initials", options: null }],
+    );
+    expect(issues.map((i) => i.message).join(" ")).toContain("não tem nenhum campo de assinatura");
+    expect(issues.map((i) => i.message).join(" ")).toContain("iniciais");
+  });
+  it("valida valores submetidos", () => {
+    const fields = [
+      { id: "1", type: "text" as const, required: true, options: null, label: "Nome" },
+      { id: "2", type: "dropdown" as const, required: false, options: ["A", "B"], label: "Hotel" },
+      { id: "3", type: "signature" as const, required: true, options: null, label: null },
+    ];
+    expect(validateFieldValues(fields, { "1": "", "2": "C", "3": "x" })).toHaveLength(3);
+    expect(validateFieldValues(fields, { "1": "Ana", "2": "A", "3": PNG_1x1 })).toHaveLength(0);
+  });
+});
+
+describe("certificado de conclusão", () => {
+  it("gera um PDF com várias páginas quando o histórico é longo", async () => {
+    const events = Array.from({ length: 120 }, (_, i) => ({
+      event: i % 2 ? "recipient.viewed" : "recipient.notified",
+      created_at: new Date(2026, 10, 21, 10, i).toISOString(),
+      recipient_id: "r1",
+      ip: "10.0.0.1",
+      hash: "a".repeat(64),
+    }));
+    const bytes = await buildAuditCertificate({
+      orgName: "Altis Hotels",
+      document: {
+        id: "d1",
+        title: "Contrato de fornecimento — Hotel Altis Avenida",
+        signature_mode: "qualified",
+        sent_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+        original_sha256: "b".repeat(64),
+        final_sha256: "c".repeat(64),
+        final_label: "do PDF assinado",
+      },
+      owner: { name: "Diogo", email: "diogo@altishotels.com" },
+      recipients: [
+        {
+          id: "r1", name: "Maria Fernandes Silva", email: "maria@x.pt", role: "signer", signing_order: 1, status: "signed",
+          signed_at: new Date().toISOString(), sign_ip: "10.0.0.1", cert_subject: "CN=Maria Fernandes Silva",
+          cert_issuer: "CN=EC de Assinatura Digital Qualificada do Cartão de Cidadão 0020", cert_serial: "0a1b", decline_reason: null,
+        },
+      ],
+      events,
+      chainIntact: true,
+    });
+    const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBeGreaterThan(1);
+  });
+});
