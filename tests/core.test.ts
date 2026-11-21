@@ -35,7 +35,7 @@ async function samplePdf(rotate = 0): Promise<Uint8Array> {
 function testTrust(): TrustStore {
   return {
     anchors: [parseCertificate(pemToDer(testPem("root")))],
-    intermediates: [parseCertificate(pemToDer(testPem("cc008"))), parseCertificate(pemToDer(testPem("sigca"))), parseCertificate(pemToDer(testPem("authca")))],
+    intermediates: ["cc008", "sigca", "authca", "cc008ec", "sigca_ec"].map((n) => parseCertificate(pemToDer(testPem(n)))),
   };
 }
 function pemToDer(pem: string) {
@@ -145,10 +145,42 @@ describe("validação de assinatura com Cartão de Cidadão", () => {
     await expect(verifyIncrementalQualifiedSignature(prepared, signed, { trust })).resolves.toBeTruthy();
   });
 
+  it("aceita a hierarquia EC atual (CA intermédia P-521, como a «Cartão de Cidadão 008»)", async () => {
+    const prepared = await samplePdf();
+    const signed = await appendIncrementalSignature(prepared, await testKey("ana_ec", ["sigca_ec", "cc008ec"]));
+    const r = await verifyIncrementalQualifiedSignature(prepared, signed, { trust });
+    expect(r.signer.commonName).toBe("Ana Ribeiro");
+    expect(r.chain.map((c) => c.commonName)).toContain("Cartão de Cidadão 008");
+  });
+
+  it("deteta assinatura P-521 adulterada (verificação em JavaScript puro)", async () => {
+    const sub = parseCertificate(pemToDer(testPem("sigca_ec")));
+    const issuer = parseCertificate(pemToDer(testPem("cc008ec")));
+    expect(await sub.verify(issuer)).toBe(true);
+    const bad = parseCertificate(pemToDer(testPem("sigca_ec")));
+    const v = new Uint8Array(bad.signatureValue.valueBlock.valueHexView);
+    v[v.length - 3] ^= 0xff;
+    bad.signatureValue = new (await import("asn1js")).BitString({ valueHex: v.buffer });
+    expect(await bad.verify(issuer)).toBe(false);
+  });
+
   it("recusa um cartão falso (cadeia com outra raiz, mesmos nomes)", async () => {
     const prepared = await samplePdf();
     const signed = await appendIncrementalSignature(prepared, await testKey("rogue", ["rogue_sigca", "rogue_cc", "rogue_root"]));
     await expect(verifyIncrementalQualifiedSignature(prepared, signed, { trust })).rejects.toMatchObject({ code: "untrusted" });
+  });
+
+  it("recusa certificado falso com as CAs verdadeiras acrescentadas na assinatura", async () => {
+    // O atacante assina com um certificado próprio cujo emissor tem o nome da CA verdadeira e
+    // inclui na assinatura as CAs verdadeiras, na esperança de que sejam essas a ser validadas.
+    // Caso perigoso: a CA verdadeira acrescentada não está na lista local (ex.: CMD 00003/00004).
+    const partialTrust: TrustStore = { anchors: trust.anchors, intermediates: [parseCertificate(pemToDer(testPem("cc008")))] };
+    const prepared = await samplePdf();
+    const signed = await appendIncrementalSignature(prepared, await testKey("rogue", ["sigca", "cc008"]));
+    await expect(verifyIncrementalQualifiedSignature(prepared, signed, { trust: partialTrust })).rejects.toMatchObject({ code: "untrusted" });
+    // E a assinatura legítima com a mesma lista parcial continua a ser aceite (a CA vem na assinatura).
+    const ok = await appendIncrementalSignature(prepared, await testKey("maria", ["sigca", "cc008"]));
+    await expect(verifyIncrementalQualifiedSignature(prepared, ok, { trust: partialTrust })).resolves.toBeTruthy();
   });
 
   it("recusa o certificado de autenticação do cartão", async () => {
@@ -200,8 +232,29 @@ describe("validação de assinatura com Cartão de Cidadão", () => {
     expect(real.anchors.length).toBe(2);
     const cns = real.intermediates.map((c) => c.subject.typesAndValues.find((t) => t.type === "2.5.4.3")!.value.valueBlock.value);
     expect(cns).toContain("EC de Assinatura Digital Qualificada do Cartão de Cidadão 0020");
+    expect(cns).toContain("EC de Chave Móvel Digital de Assinatura Digital Qualificada do Cartão de Cidadão 00007");
     expect(cns.filter((n: string) => PT_CC_POLICY.requiredIntermediateCn.test(n)).length).toBe(6);
+    // Todas as CAs de assinatura (CC e CMD) passam no filtro do emissor
+    for (const n of cns.filter((n: string) => n.startsWith("EC de"))) expect(n).toMatch(PT_CC_POLICY.signerIssuerCn);
   });
+
+  it("as CAs reais encadeiam até à ECRaizEstado (incluindo a CMD 00007 via CC 008 P-521)", async () => {
+    const real = trustStoreFromBase64(PT_TRUST_ANCHORS, PT_INTERMEDIATES);
+    const cnOf = (c: pkijs.Certificate) => c.subject.typesAndValues.find((t) => t.type === "2.5.4.3")!.value.valueBlock.value as string;
+    const wanted = [/Cidadão 00007$/, /Cidadão 00001$/, /Qualificada do Cartão de Cidadão 0020$/];
+    for (const ca of real.intermediates.filter((c) => wanted.some((w) => w.test(cnOf(c))))) {
+      const engine = new pkijs.CertificateChainValidationEngine({
+        trustedCerts: real.anchors,
+        certs: [...real.intermediates.filter((c) => c !== ca), ca],
+        checkDate: new Date("2026-06-01"),
+      });
+      const r = await engine.verify();
+      const cn = ca.subject.typesAndValues.find((t) => t.type === "2.5.4.3")!.value.valueBlock.value;
+      expect(r.result, `${cn}: ${r.resultMessage}`).toBe(true);
+      expect(cnOf(r.certificatePath![0])).toBe(cn);
+      expect(r.certificatePath!.map(cnOf)).toContain(cn.endsWith("00001") ? "Cartão de Cidadão 004" : "Cartão de Cidadão 008");
+    }
+  }, 120_000);
 
   it("um certificado de teste não passa na cadeia real", async () => {
     const real = trustStoreFromBase64(PT_TRUST_ANCHORS, PT_INTERMEDIATES);

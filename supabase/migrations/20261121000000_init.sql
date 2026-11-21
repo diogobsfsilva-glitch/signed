@@ -416,6 +416,10 @@ begin
   if auth.role() = 'authenticated' and new.status is distinct from old.status then
     raise exception 'O estado do documento não pode ser alterado diretamente';
   end if;
+  -- O original tem de estar na pasta do próprio documento (impede apontar para ficheiros de outros).
+  if new.original_path is not null and new.original_path <> new.workspace_id::text || '/' || new.id::text || '/original.pdf' then
+    raise exception 'Caminho do ficheiro inválido';
+  end if;
   return new;
 end;
 $$;

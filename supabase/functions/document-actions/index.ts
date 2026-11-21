@@ -33,6 +33,9 @@ Deno.serve(handler(async (req) => {
       if (b.doc.expires_at && new Date(b.doc.expires_at) < new Date(Date.now() + 3600_000)) {
         throw new HttpError(422, "O prazo tem de ser pelo menos daqui a uma hora.", "validation");
       }
+      if (b.doc.original_path !== `${b.doc.workspace_id}/${b.doc.id}/original.pdf`) {
+        throw new HttpError(422, "Ficheiro do documento inválido.", "validation");
+      }
       const pdf = await download(sb, b.doc.original_path!);
       const pages = await assertValidPdf(pdf).catch((e) => {
         throw new HttpError(422, (e as Error).message, "invalid_pdf");

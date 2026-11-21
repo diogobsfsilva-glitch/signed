@@ -18,16 +18,22 @@ function pemBlocks(pem: string, label: string): Uint8Array[] {
   return [...pem.matchAll(re)].map((m) => fromBase64(m[1]));
 }
 
-/** Lê o certificado (PEM, pode incluir a cadeia) e a chave privada PKCS#8 (PEM, RSA). */
+const CURVES: Record<string, string> = { "1.2.840.10045.3.1.7": "P-256", "1.3.132.0.34": "P-384" };
+
+/** Lê o certificado (PEM, pode incluir a cadeia) e a chave privada PKCS#8 (PEM, RSA ou EC P-256/P-384). */
 export async function loadSealKey(certPem: string, keyPem: string): Promise<SealKey> {
   const chain = pemBlocks(certPem, "CERTIFICATE").map(parseCertificate);
   if (chain.length === 0) throw new Error("SEAL_CERT_PEM sem certificados");
   const keyDer = pemBlocks(keyPem, "PRIVATE KEY")[0];
   if (!keyDer) throw new Error("SEAL_KEY_PEM tem de estar em formato PKCS#8 (BEGIN PRIVATE KEY)");
+  const spki = chain[0].subjectPublicKeyInfo.algorithm;
+  const isEc = spki.algorithmId === "1.2.840.10045.2.1";
+  const curve = isEc ? CURVES[(spki.algorithmParams as asn1js.ObjectIdentifier).valueBlock.toString()] : null;
+  if (isEc && !curve) throw new Error("Curva EC não suportada para o selo (use RSA, P-256 ou P-384)");
   const privateKey = await crypto.subtle.importKey(
     "pkcs8",
     toArrayBuffer(keyDer),
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    isEc ? { name: "ECDSA", namedCurve: curve! } : { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
     false,
     ["sign"],
   );

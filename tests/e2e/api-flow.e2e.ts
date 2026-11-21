@@ -128,6 +128,13 @@ describe("segurança (RLS)", () => {
     expect(ev!.length).toBeGreaterThan(0);
   });
 
+  it("não é possível apontar o original para o ficheiro de outro documento", async () => {
+    const { doc: a } = await createDoc("simple", [{ name: "Externo", email: "ext4@exemplo.pt" }]);
+    const { doc: b } = await createDoc("simple", [{ name: "Externo", email: "ext5@exemplo.pt" }]);
+    const r = await owner.from("documents").update({ original_path: `${ws}/${a.id}/original.pdf` }).eq("id", b.id);
+    expect(r.error?.message).toContain("Caminho do ficheiro inválido");
+  });
+
   it("outro colaborador não pode enviar o documento", async () => {
     const { doc } = await createDoc("simple", [{ name: "Externo", email: "ext3@exemplo.pt" }]);
     const otherJwt = (await other.auth.getSession()).data.session!.access_token;
@@ -263,6 +270,25 @@ describe("fluxo com Cartão de Cidadão (PKI de teste)", () => {
     expect(rec![0].cert_subject).toContain("Maria Fernandes Silva");
     const { data: ev } = await owner.from("audit_events").select("event").eq("document_id", doc.id).order("id");
     expect(ev!.map((e) => e.event)).toEqual(expect.arrayContaining(["document.prepared", "recipient.cc_rejected", "recipient.cc_signed", "document.completed"]));
+  });
+});
+
+describe("Cartão de Cidadão — hierarquia EC (P-521) no runtime do Supabase", () => {
+  it("aceita assinatura cuja cadeia passa por uma CA P-521", async () => {
+    const { doc } = await createDoc("qualified", [{ name: "Ana Ribeiro", email: "ana.ec@exemplo.pt" }], false);
+    expect((await fn("document-actions", { action: "send", document_id: doc.id }, jwt)).ok).toBe(true);
+    const t = await tokenFor("ana.ec@exemplo.pt");
+    const s = await login(t, "ana.ec@exemplo.pt");
+    const dl = await fn("signer-api", { action: "cc-download", token: t, session: s });
+    const current = new Uint8Array(await (await fetch(dl.url)).arrayBuffer());
+    const signed = await appendIncrementalSignature(current, await testKey("ana_ec", ["sigca_ec"]));
+    const up = await fn("signer-api", { action: "cc-upload-url", token: t, session: s });
+    const anonClient = createClient(URL_, ANON, { auth: { persistSession: false } });
+    await anonClient.storage.from("documents").uploadToSignedUrl(up.path, up.uploadToken, signed, { contentType: "application/pdf" });
+    const r = await fn("signer-api", { action: "cc-submit", token: t, session: s, path: up.path });
+    expect(r.error).toBeUndefined();
+    expect(r.ok).toBe(true);
+    expect(r.completed).toBe(true);
   });
 });
 

@@ -9,3 +9,5 @@ supabase/.branches
 coverage
 test-results
 playwright-report
+seal-key.pem
+seal-cert.pem

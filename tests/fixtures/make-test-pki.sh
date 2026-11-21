@@ -48,6 +48,17 @@ selfsigned rogue_root "/C=PT/O=Sistema de Certificação Eletrónica do Estado/C
 issue rogue_cc "/C=PT/O=SCEE/OU=ECEstado/CN=Cartão de Cidadão 008" rogue_root ca
 issue rogue_sigca "/C=PT/O=IRN/CN=EC de Assinatura Digital Qualificada do Cartão de Cidadão 0020" rogue_cc ca
 issue rogue "/C=PT/SN=Fernandes Silva/GN=Maria/serialNumber=BI123456780/CN=Maria Fernandes Silva" rogue_sigca sign_leaf
+# Hierarquia EC como a atual: "Cartão de Cidadão 008" com chave P-521, CA de assinatura P-384, titular P-256
+eckey() { openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:$2 -out "$1.key" 2>/dev/null; }
+eissue() { # nome subj emissor extensão curva
+  eckey "$1" "$5"
+  openssl req -new -utf8 -key "$1.key" -subj "$2" -out "$1.csr" -config ext.cnf
+  openssl x509 -req -in "$1.csr" -CA "$3.pem" -CAkey "$3.key" -CAcreateserial -days 1825 -sha256 \
+    -extfile ext.cnf -extensions "$4" -out "$1.pem" 2>/dev/null
+}
+eissue cc008ec "/C=PT/O=SCEE - Sistema de Certificação Electrónica do Estado/OU=ECEstado/CN=Cartão de Cidadão 008" root ca P-521
+eissue sigca_ec "/C=PT/O=Agência para a Reforma Tecnológica do Estado/OU=Cartão de Cidadão/OU=subECEstado/CN=EC de Assinatura Digital Qualificada do Cartão de Cidadão 0021" cc008ec ca P-384
+eissue ana_ec "/C=PT/SN=Ribeiro/GN=Ana/serialNumber=BI111222333/CN=Ana Ribeiro" sigca_ec sign_leaf P-256
 # Selo da plataforma (autoassinado)
 key seal
 openssl req -new -x509 -utf8 -key seal.key -subj "/C=PT/O=Altis Hotels/CN=Signed - Selo eletrónico (TESTE)" -days 3650 -sha256 -extensions seal -config ext.cnf -out seal.pem

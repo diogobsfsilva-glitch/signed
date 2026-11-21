@@ -137,7 +137,7 @@ export async function buildAuditCertificate(input: AuditCertificateInput): Promi
   for (const r of sorted) {
     w.text(`${r.name} <${r.email}>`, { bold: true, size: 10 });
     w.kv("Papel", r.role === "signer" ? `Signatário (ordem ${r.signing_order})` : "Recebe cópia");
-    w.kv("Estado", RECIPIENT_STATUS_LABELS[r.status]);
+    if (r.role === "signer") w.kv("Estado", RECIPIENT_STATUS_LABELS[r.status]);
     if (r.signed_at) w.kv("Assinou em", formatLisbon(r.signed_at));
     if (r.sign_ip) w.kv("Endereço IP", r.sign_ip);
     if (r.cert_subject) w.kv("Certificado", r.cert_subject);

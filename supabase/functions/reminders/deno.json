@@ -3,6 +3,7 @@
     "pdf-lib": "npm:pdf-lib@1.17.1",
     "pkijs": "npm:pkijs@3.4.3",
     "asn1js": "npm:asn1js@3.1.0",
-    "@supabase/supabase-js": "npm:@supabase/supabase-js@2.119.2"
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2.119.2",
+    "@noble/curves/nist": "npm:@noble/curves@1.9.7/nist"
   }
 }

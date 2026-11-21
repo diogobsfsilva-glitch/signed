@@ -4,6 +4,9 @@
 import * as asn1js from "asn1js";
 import * as pkijs from "pkijs";
 import { bytesEqual, concatBytes, fromBase64, fromHex, sha256Hex, toArrayBuffer, toHex } from "./util.ts";
+import { installCryptoEngine } from "./crypto-engine.ts";
+
+installCryptoEngine();
 
 export interface PdfSignature {
   byteRange: [number, number, number, number];
@@ -233,20 +236,30 @@ export async function verifyIncrementalQualifiedSignature(
   const { sd, signer } = await verifyCms(sig, uploaded);
 
   // Cadeia de certificação.
+  // ATENÇÃO: o pkijs remove certificados repetidos e valida o ÚLTIMO da lista. O certificado do
+  // signatário tem de ser o último e não pode aparecer antes; caso contrário seria validada outra
+  // cadeia (ex.: CAs verdadeiras acrescentadas pelo atacante a seguir a um certificado falso).
+  const same = (a: pkijs.Certificate, b: pkijs.Certificate) => bytesEqual(new Uint8Array(a.tbsView), new Uint8Array(b.tbsView));
   const embedded = (sd.certificates ?? []).filter((c): c is pkijs.Certificate => c instanceof pkijs.Certificate);
+  const pool: pkijs.Certificate[] = [];
+  for (const c of [...opts.trust.intermediates, ...embedded]) {
+    if (!same(c, signer) && !pool.some((p) => same(p, c))) pool.push(c);
+  }
   const engine = new pkijs.CertificateChainValidationEngine({
     trustedCerts: opts.trust.anchors,
-    certs: [...opts.trust.intermediates, ...embedded, signer],
+    certs: [...pool, signer],
     checkDate: opts.checkDate ?? new Date(),
   });
   const chainRes = await engine.verify();
-  if (!chainRes.result || !chainRes.certificatePath) {
+  const path = chainRes.certificatePath ?? [];
+  if (!chainRes.result || path.length < 2 || !same(path[0], signer)) {
+    console.warn(`cadeia CC recusada: ${chainRes.resultCode} ${chainRes.resultMessage}`);
     throw new VerifyError(
       "O certificado da assinatura não é um certificado qualificado do Cartão de Cidadão ou da Chave Móvel Digital (ou já não é válido).",
       "untrusted",
     );
   }
-  const chain = chainRes.certificatePath.map(certInfo);
+  const chain = path.map(certInfo);
   const s = certInfo(signer);
   if (!policy.signerIssuerCn.test(s.issuerCommonName)) {
     throw new VerifyError(
