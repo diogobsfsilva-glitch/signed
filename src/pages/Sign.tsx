@@ -16,7 +16,7 @@ import { browserLang, I18n, isLang, LANGS, translator, useT, type Lang } from ".
 const anon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false, storageKey: "signed-signer" } });
 
 interface StartInfo {
-  recipient: { name: string; email: string; status: string; in_person?: boolean; language?: string };
+  recipient: { name: string; email: string; status: string; in_person?: boolean; language?: string; group?: string[] | null };
   document: { title: string; status: string; sender: string; mode: "simple" | "qualified" };
   brand?: BrandInfo | null;
 }
@@ -183,6 +183,7 @@ function Otp({ token, start, onSession }: { token: string; start: StartInfo; onS
   const { t, tn, error: errText } = useT();
   const [sent, setSent] = useState(false);
   const [code, setCode] = useState("");
+  const [member, setMember] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -190,7 +191,7 @@ function Otp({ token, start, onSession }: { token: string; start: StartInfo; onS
     setBusy(true);
     setError(null);
     try {
-      await signerApi({ action: "send-otp", token });
+      await signerApi({ action: "send-otp", token, member: member ?? undefined });
       setSent(true);
     } catch (e) {
       setError(errText(e));
@@ -227,10 +228,23 @@ function Otp({ token, start, onSession }: { token: string; start: StartInfo; onS
         )}
         <div className="mt-5 border-t border-slate-100 pt-5">
           <p className="text-sm">
-            {tn("hello", { name: <strong>{start.recipient.name}</strong> })} {tn("code_intro", { email: <strong>{start.recipient.email}</strong> })}
+            {start.recipient.group ? (
+              tn("group_intro", { name: <strong>{start.recipient.name}</strong> })
+            ) : (
+              <>{tn("hello", { name: <strong>{start.recipient.name}</strong> })} {tn("code_intro", { email: <strong>{start.recipient.email}</strong> })}</>
+            )}
           </p>
+          {start.recipient.group && !sent && (
+            <div className="mt-3 space-y-1.5" role="radiogroup">
+              {start.recipient.group.map((m, i) => (
+                <label key={m} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm ${member === i ? "border-navy-500 bg-navy-50" : "border-slate-200"}`}>
+                  <input type="radio" name="member" checked={member === i} onChange={() => setMember(i)} /> {m}
+                </label>
+              ))}
+            </div>
+          )}
           {!sent ? (
-            <button className="btn-primary mt-4 w-full py-2.5" onClick={send} disabled={busy}>
+            <button className="btn-primary mt-4 w-full py-2.5" onClick={send} disabled={busy || (!!start.recipient.group && member === null)}>
               {busy && <Spinner className="h-4 w-4 text-white" />} {t("send_code")}
             </button>
           ) : (

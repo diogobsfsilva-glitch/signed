@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthProvider";
 import type { DocStatus } from "../../supabase/functions/_shared/types";
 import { EmptyState, FolderIcon, FullPageSpinner, ModeBadge, Modal, PlusIcon, StatusBadge, toast } from "../components/ui";
 import { errorMessage, relative } from "../lib/format";
+import { documentAction } from "../lib/api";
 
 interface Row {
   id: string;
@@ -53,6 +54,29 @@ export function Dashboard() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [newFolder, setNewFolder] = useState(false);
+  // Seleção de documentos em curso para ações em massa (lembrar, cancelar).
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  async function bulk(action: "remind" | "cancel") {
+    const ids = [...picked];
+    if (action === "cancel" && !confirm(`Cancelar ${ids.length} documento(s)? Os links deixam de funcionar.`)) return;
+    setBulkBusy(true);
+    let ok = 0;
+    const errors: string[] = [];
+    for (const id of ids) {
+      try {
+        await documentAction(action, id);
+        ok++;
+      } catch (e) {
+        errors.push(`${rows?.find((x) => x.id === id)?.title}: ${errorMessage(e)}`);
+      }
+    }
+    setBulkBusy(false);
+    setPicked(new Set());
+    toast(`${ok} ${action === "remind" ? "lembrete(s) enviado(s)" : "documento(s) cancelado(s)"}${errors.length ? `; ${errors.length} com erro` : ""}.`, errors.length ? "error" : "ok");
+    if (errors.length) console.warn(errors);
+    load();
+  }
   const nav = useNavigate();
 
   async function load() {
@@ -183,15 +207,36 @@ export function Dashboard() {
                 {rows.length === 0 ? "Carregue um PDF ou Word, indique quem assina e onde, e envie." : "Experimente outro filtro ou pesquisa."}
               </EmptyState>
             ) : (
+              <>
+              {picked.size > 0 && (
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-navy-50 px-3 py-2 text-sm text-navy-900">
+                  <span><strong>{picked.size}</strong> documento(s) em curso selecionado(s)</span>
+                  <span className="flex gap-2">
+                    <button className="btn-secondary py-1" disabled={bulkBusy} onClick={() => bulk("remind")}>Enviar lembrete</button>
+                    <button className="btn-danger py-1" disabled={bulkBusy} onClick={() => bulk("cancel")}>Cancelar</button>
+                    <button className="btn-ghost py-1" disabled={bulkBusy} onClick={() => setPicked(new Set())}>Limpar</button>
+                  </span>
+                </div>
+              )}
               <ul className="card divide-y divide-slate-100 overflow-hidden">
                 {filtered.map((r) => {
                   const signers = r.recipients.filter((x) => x.role === "signer");
                   const done = signers.filter((x) => x.status === "signed").length;
                   const mine = r.owner_id === profile?.id;
                   return (
-                    <li key={r.id}>
+                    <li key={r.id} className="flex items-stretch">
+                      <span className="flex w-9 shrink-0 items-center justify-center">
+                        {r.status === "in_progress" && (
+                          <input
+                            type="checkbox"
+                            aria-label={`Selecionar ${r.title}`}
+                            checked={picked.has(r.id)}
+                            onChange={(e) => setPicked((s) => { const n = new Set(s); if (e.target.checked) n.add(r.id); else n.delete(r.id); return n; })}
+                          />
+                        )}
+                      </span>
                       <button
-                        className="flex w-full flex-col gap-2 px-4 py-3.5 text-left hover:bg-slate-50 sm:flex-row sm:items-center sm:gap-4"
+                        className="flex min-w-0 flex-1 flex-col gap-2 py-3.5 pr-4 text-left hover:bg-slate-50 sm:flex-row sm:items-center sm:gap-4"
                         onClick={() => nav(r.status === "draft" ? `/documentos/${r.id}/editar` : `/documentos/${r.id}`)}
                       >
                         <div className="min-w-0 flex-1">
@@ -216,6 +261,7 @@ export function Dashboard() {
                   );
                 })}
               </ul>
+              </>
             )}
           </div>
         </section>

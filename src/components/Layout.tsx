@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
-import { InboxIcon, LinkIcon, Logo, LogoutIcon, MenuIcon, PlusIcon, SettingsIcon, TemplateIcon } from "./ui";
+import { ChartIcon, InboxIcon, LinkIcon, Logo, LogoutIcon, MenuIcon, PlusIcon, SettingsIcon, TemplateIcon } from "./ui";
 
 export function Layout() {
   const { profile, signOut } = useAuth();
@@ -40,6 +40,9 @@ export function Layout() {
         </NavLink>
         <NavLink to="/links" className={link}>
           <LinkIcon className="h-4.5 w-4.5" /> Links públicos
+        </NavLink>
+        <NavLink to="/relatorios" className={link}>
+          <ChartIcon className="h-4.5 w-4.5" /> Relatórios
         </NavLink>
         {profile?.role === "admin" && (
           <NavLink to="/admin" className={link}>

@@ -75,6 +75,9 @@ export interface RecipientRow {
   in_person?: boolean;
   /** Idioma da página de assinatura e dos emails (pt, en, es, fr). */
   language?: string;
+  /** Grupo de assinatura: todos recebem o convite, assina o primeiro (o email fica em signed_by). */
+  group_emails?: string[] | null;
+  signed_by?: string | null;
   notified_at: string | null;
   notified_phase: DocPhase | null;
   reminded_at: string | null;

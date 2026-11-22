@@ -15,6 +15,7 @@ interface TRecipient {
   signing_order: number;
   civil_id: string | null;
   color: string;
+  group_emails: string[] | null;
 }
 
 export interface TemplateRow {
@@ -43,7 +44,7 @@ export function Templates() {
     supabase
       .from("documents")
       .select(
-        "id, title, signature_mode, updated_at, owner_id, workspace_id, original_path, recipients(id, name, email, role, signing_order, civil_id, color), fields(count), owner:profiles!documents_owner_id_fkey(full_name, email)",
+        "id, title, signature_mode, updated_at, owner_id, workspace_id, original_path, recipients(id, name, email, role, signing_order, civil_id, color, group_emails), fields(count), owner:profiles!documents_owner_id_fkey(full_name, email)",
       )
       .eq("is_template", true)
       .order("title")
@@ -177,6 +178,7 @@ export function UseTemplateModal({ template, onClose }: { template: TemplateRow 
     setError(null);
     const seen = new Set<string>();
     for (const r of ordered) {
+      if (r.group_emails?.length) continue; // grupo fixo do modelo
       const v = values[r.id];
       const email = v.email.trim().toLowerCase();
       if (!v.name.trim()) return setError(`Indique o nome para "${r.name}".`);
@@ -194,7 +196,7 @@ export function UseTemplateModal({ template, onClose }: { template: TemplateRow 
         asTemplate: false,
         title,
         workspaceId: ws,
-        recipients: ordered.map((r) => ({
+        recipients: ordered.filter((r) => !r.group_emails?.length).map((r) => ({
           id: r.id,
           name: values[r.id].name.trim(),
           email: values[r.id].email.trim().toLowerCase(),
@@ -238,6 +240,9 @@ export function UseTemplateModal({ template, onClose }: { template: TemplateRow 
                   <span className="font-medium">{r.name}</span>
                   <span className="text-xs text-slate-400">{r.role === "signer" ? "assina" : "recebe cópia"}</span>
                 </div>
+                {r.group_emails?.length ? (
+                  <p className="text-xs text-slate-500">Grupo de assinatura: {r.group_emails.join(", ")}</p>
+                ) : (
                 <div className="grid gap-2 sm:grid-cols-2">
                   <input
                     className="input"
@@ -268,6 +273,7 @@ export function UseTemplateModal({ template, onClose }: { template: TemplateRow 
                     />
                   )}
                 </div>
+                )}
               </li>
             ))}
           </ol>

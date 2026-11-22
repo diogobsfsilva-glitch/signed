@@ -16,6 +16,7 @@ import { Templates } from "./pages/Templates";
 import { BulkSend } from "./pages/BulkSend";
 import { PublicLinks } from "./pages/PublicLinks";
 import { PublicForm } from "./pages/PublicForm";
+import { Reports } from "./pages/Reports";
 
 function Protected() {
   const { loading, session, profile } = useAuth();
@@ -48,6 +49,7 @@ createRoot(document.getElementById("root")!).render(
                   <Route path="modelos" element={<Templates />} />
                   <Route path="modelos/:id/envio-em-massa" element={<BulkSend />} />
                   <Route path="links" element={<PublicLinks />} />
+                  <Route path="relatorios" element={<Reports />} />
                   <Route path="documentos/:id/editar" element={<Editor />} />
                   <Route path="documentos/:id" element={<DocumentDetail />} />
                   <Route

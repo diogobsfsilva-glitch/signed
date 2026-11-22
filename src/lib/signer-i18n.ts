@@ -123,6 +123,8 @@ const pt = {
   e_link_expired: "Este link já expirou.",
   e_link_exhausted: "Este link já atingiu o número máximo de utilizações.",
   e_network: "Sem ligação ao servidor. Verifique a internet e tente de novo.",
+  group_intro: "Este documento pode ser assinado por qualquer pessoa de {name}. Escolha o seu email para receber o código:",
+  e_member_required: "Escolha o seu email.",
 };
 export type Dict = typeof pt;
 
@@ -239,6 +241,8 @@ const en: Dict = {
   e_link_expired: "This link has expired.",
   e_link_exhausted: "This link has reached its maximum number of uses.",
   e_network: "No connection to the server. Check your internet and try again.",
+  group_intro: "This document can be signed by anyone in {name}. Choose your email to receive the code:",
+  e_member_required: "Choose your email.",
 };
 
 const es: Dict = {
@@ -354,6 +358,8 @@ const es: Dict = {
   e_link_expired: "Este enlace ha caducado.",
   e_link_exhausted: "Este enlace ha alcanzado el número máximo de usos.",
   e_network: "Sin conexión con el servidor. Compruebe internet e inténtelo de nuevo.",
+  group_intro: "Este documento lo puede firmar cualquier persona de {name}. Elija su correo para recibir el código:",
+  e_member_required: "Elija su correo.",
 };
 
 const fr: Dict = {
@@ -469,6 +475,8 @@ const fr: Dict = {
   e_link_expired: "Ce lien a expiré.",
   e_link_exhausted: "Ce lien a atteint son nombre maximal d'utilisations.",
   e_network: "Pas de connexion au serveur. Vérifiez internet et réessayez.",
+  group_intro: "Ce document peut être signé par n'importe quelle personne de {name}. Choisissez votre e-mail pour recevoir le code :",
+  e_member_required: "Choisissez votre e-mail.",
 };
 
 export const DICTS: Record<Lang, Dict> = { pt, en, es, fr };

@@ -152,6 +152,7 @@ export const IdIcon = (p: IP) => <S {...p}><rect x="3" y="5" width="18" height="
 export const PenIcon = (p: IP) => <S {...p}><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></S>;
 export const TemplateIcon = (p: IP) => <S {...p}><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 7h8M8 11h8M8 15h4" /><path d="M15 15l1.5 1.5L19 14" /></S>;
 export const LinkIcon = (p: IP) => <S {...p}><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></S>;
+export const ChartIcon = (p: IP) => <S {...p}><path d="M4 20V10M10 20V4M16 20v-7M21 20H3" /></S>;
 export const PlusIcon = (p: IP) => <S {...p}><path d="M12 5v14M5 12h14" /></S>;
 export const FolderIcon = (p: IP) => <S {...p}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></S>;
 export const InboxIcon = (p: IP) => <S {...p}><path d="M4 13l2-8h12l2 8v6H4z" /><path d="M4 13h5l1 2h4l1-2h5" /></S>;

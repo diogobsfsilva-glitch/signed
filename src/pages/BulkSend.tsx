@@ -13,7 +13,7 @@ import { errorMessage } from "../lib/format";
 const MAX_ROWS = 200;
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-interface TRecipient { id: string; name: string; email: string; role: "signer" | "cc"; signing_order: number; color: string }
+interface TRecipient { id: string; name: string; email: string; role: "signer" | "cc"; signing_order: number; color: string; group_emails: string[] | null }
 interface TField { id: string; recipient_id: string; type: FieldType; label: string | null; options: string[] | null; readonly: boolean }
 interface Template {
   id: string;
@@ -60,7 +60,7 @@ export function BulkSend() {
   useEffect(() => {
     supabase
       .from("documents")
-      .select("id, title, workspace_id, original_path, signature_mode, is_template, recipients(id, name, email, role, signing_order, color), fields(id, recipient_id, type, label, options, readonly)")
+      .select("id, title, workspace_id, original_path, signature_mode, is_template, recipients(id, name, email, role, signing_order, color, group_emails), fields(id, recipient_id, type, label, options, readonly)")
       .eq("id", id!)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -68,7 +68,7 @@ export function BulkSend() {
         const t = data as unknown as Template;
         t.recipients.sort((a, b) => a.signing_order - b.signing_order);
         setTpl(t);
-        const signers = t.recipients.filter((r) => r.role === "signer");
+        const signers = t.recipients.filter((r) => r.role === "signer" && !r.group_emails?.length);
         setVarId((signers.find((r) => !r.email) ?? signers[0])?.id ?? "");
         setPattern(`${t.title} — {nome}`);
       });
@@ -90,7 +90,7 @@ export function BulkSend() {
 
   const variable = tpl.recipients.find((r) => r.id === varId);
   const fixed = tpl.recipients.filter((r) => r.id !== varId);
-  const fixedMissing = fixed.filter((r) => !r.email);
+  const fixedMissing = fixed.filter((r) => !r.email && !r.group_emails?.length);
   const qualified = tpl.signature_mode === "qualified";
   const valid = rows.filter((r) => r.errors.length === 0);
   const done = Object.values(results).filter((r) => r.state === "sent").length;
@@ -126,7 +126,7 @@ export function BulkSend() {
     if (all.length - 1 > MAX_ROWS) return setCsvError(`No máximo ${MAX_ROWS} linhas por envio (o ficheiro tem ${all.length - 1}).`);
     const w: string[] = [];
     if (cols.unknown.length) w.push(`Colunas ignoradas (não correspondem a nenhum campo do modelo): ${cols.unknown.join(", ")}.`);
-    const fixedEmails = new Set(fixed.map((r) => r.email.toLowerCase()).filter(Boolean));
+    const fixedEmails = new Set(fixed.flatMap((r) => (r.group_emails?.length ? r.group_emails : [r.email])).map((e) => e.toLowerCase()).filter(Boolean));
     const seen = new Set<string>();
     const parsed: Row[] = all.slice(1).map((cells, i) => {
       const errors: string[] = [];
@@ -232,7 +232,7 @@ export function BulkSend() {
       <section className="card mt-6 p-5">
         <h2 className="font-semibold">1. Quem muda em cada documento</h2>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {tpl.recipients.filter((r) => r.role === "signer").map((r) => (
+          {tpl.recipients.filter((r) => r.role === "signer" && !r.group_emails?.length).map((r) => (
             <label key={r.id} className={`flex cursor-pointer items-center gap-2 rounded-lg border p-3 text-sm ${varId === r.id ? "border-navy-500 bg-navy-50" : "border-slate-200"}`}>
               <input type="radio" name="var" checked={varId === r.id} onChange={() => setVarId(r.id)} disabled={started} />
               <span className="h-2.5 w-2.5 rounded-full" style={{ background: r.color }} />
@@ -244,7 +244,7 @@ export function BulkSend() {
         </div>
         {fixed.length > 0 && (
           <p className="mt-3 text-sm text-slate-600">
-            Fixos em todos os documentos: {fixed.map((r) => `${r.name}${r.email ? ` (${r.email})` : ""}`).join(", ")}.
+            Fixos em todos os documentos: {fixed.map((r) => `${r.name}${r.email ? ` (${r.email})` : r.group_emails?.length ? " (grupo)" : ""}`).join(", ")}.
           </p>
         )}
         {fixedMissing.length > 0 && (

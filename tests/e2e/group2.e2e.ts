@@ -244,3 +244,71 @@ describe("idiomas e marca do hotel", () => {
     expect(inv!.subject).toMatch(/le pide firmar/);
   });
 });
+
+describe("grupos de assinatura", () => {
+  it("todos recebem o convite; o membro escolhido recebe o código e fica registado como quem assinou", async () => {
+    const stamp = Date.now();
+    const members = [`fin1.${stamp}@altishotels.com`, `fin2.${stamp}@altishotels.com`, `fin3.${stamp}@altishotels.com`];
+    const { data: doc } = await owner.from("documents").insert({ workspace_id: ws, owner_id: ownerId, title: `Fatura ${stamp}` }).select().single();
+    await pdfPath(doc!.id);
+    const g = crypto.randomUUID();
+    expect((await owner.from("recipients").insert({ id: g, document_id: doc!.id, name: "Direção Financeira", email: "", role: "signer", signing_order: 1, group_emails: members })).error).toBeNull();
+    await owner.from("fields").insert({ document_id: doc!.id, recipient_id: g, type: "signature", page: 1, x: 0.1, y: 0.8, w: 0.3, h: 0.08 });
+    expect((await fn("document-actions", { action: "send", document_id: doc!.id }, jwt)).ok).toBe(true);
+    for (const m of members) expect(await emailCount(m, "invite")).toBe(1);
+
+    const token = /\/s\/([A-Za-z0-9_-]+)/.exec(await lastEmail(members[0], "invite"))![1];
+    const st = await fn("signer-api", { action: "start", token });
+    expect(st.recipient.group).toHaveLength(3);
+    expect(st.recipient.group[1]).toMatch(/^fi\*+@altishotels\.com$/);
+    expect((await fn("signer-api", { action: "send-otp", token })).status).toBe(400);
+    expect((await fn("signer-api", { action: "send-otp", token, member: 1 })).ok).toBe(true);
+    expect(await emailCount(members[0], "otp")).toBe(0);
+    const code = /^\s*(\d{6})\s*$/m.exec(await lastEmail(members[1], "otp"))![1];
+    const v = await fn("signer-api", { action: "verify-otp", token, code });
+    const l = await fn("signer-api", { action: "load", token, session: v.session });
+    const sig = l.fields[0].id;
+    expect((await fn("signer-api", { action: "submit", token, session: v.session, values: { [sig]: PNG } })).ok).toBe(true);
+    const { data: r } = await admin.from("recipients").select("status, signed_by").eq("id", g).single();
+    expect(r).toEqual({ status: "signed", signed_by: members[1] });
+    // Cópia final só para quem assinou.
+    expect(await emailCount(members[1], "completed")).toBe(1);
+    expect(await emailCount(members[0], "completed")).toBe(0);
+  });
+
+  it("não é permitido no modo Cartão de Cidadão nem com um só email", async () => {
+    const { data: doc } = await owner.from("documents").insert({ workspace_id: ws, owner_id: ownerId, title: "Grupo CC", signature_mode: "qualified" }).select().single();
+    await pdfPath(doc!.id);
+    const g = crypto.randomUUID();
+    expect((await owner.from("recipients").insert({ id: g, document_id: doc!.id, name: "Grupo", email: "", role: "signer", signing_order: 1, group_emails: ["so@um.pt"] })).error).toBeTruthy();
+    await owner.from("recipients").insert({ id: g, document_id: doc!.id, name: "Grupo", email: "", role: "signer", signing_order: 1, group_emails: ["a@x.pt", "b@x.pt"] });
+    await owner.from("fields").insert({ document_id: doc!.id, recipient_id: g, type: "signature", page: 1, x: 0.1, y: 0.8, w: 0.3, h: 0.08 });
+    const r = await fn("document-actions", { action: "send", document_id: doc!.id }, jwt);
+    expect(r.status).toBe(422);
+    expect(r.error).toMatch(/grupos de assinatura só existem na assinatura simples/);
+  });
+
+  it("link público com o hotel (grupo) a contra-assinar", async () => {
+    const stamp = Date.now();
+    const { data: tpl } = await owner.from("documents").insert({ workspace_id: ws, owner_id: ownerId, title: `Autorização ${stamp}`, is_template: true }).select().single();
+    await pdfPath(tpl!.id);
+    const guest = crypto.randomUUID();
+    const desk = crypto.randomUUID();
+    await owner.from("recipients").insert([
+      { id: guest, document_id: tpl!.id, name: "Hóspede", email: "", role: "signer", signing_order: 1, group_emails: null },
+      { id: desk, document_id: tpl!.id, name: "Receção", email: "", role: "signer", signing_order: 2, group_emails: [`rec1.${stamp}@altishotels.com`, `rec2.${stamp}@altishotels.com`] },
+    ], { defaultToNull: false });
+    await owner.from("fields").insert([
+      { document_id: tpl!.id, recipient_id: guest, type: "signature", page: 1, x: 0.1, y: 0.8, w: 0.3, h: 0.08 },
+      { document_id: tpl!.id, recipient_id: desk, type: "signature", page: 1, x: 0.55, y: 0.8, w: 0.3, h: 0.08 },
+    ]);
+    const { data: link } = await owner.from("public_links").insert({ workspace_id: ws, owner_id: ownerId, template_id: tpl!.id, title: "Autorização" }).select().single();
+    const r = await fn("public-form", { action: "start", slug: link!.slug, name: "Pai Silva", email: `pai.${stamp}@exemplo.pt` });
+    expect(r.session).toBeTruthy();
+    const l = await fn("signer-api", { action: "load", token: r.token, session: r.session });
+    expect((await fn("signer-api", { action: "submit", token: r.token, session: r.session, values: { [l.fields[0].id]: PNG } })).ok).toBe(true);
+    // A receção (grupo) recebe agora o convite.
+    expect(await emailCount(`rec1.${stamp}@altishotels.com`, "invite")).toBe(1);
+    expect(await emailCount(`rec2.${stamp}@altishotels.com`, "invite")).toBe(1);
+  });
+});

@@ -144,6 +144,7 @@ export async function reassignRecipient(
   const email = next.email.trim().toLowerCase();
   const emailChanged = email !== r.email.toLowerCase();
   const patch: Record<string, unknown> = { name: next.name.trim(), email, civil_id: next.civil_id };
+  if (email && r.group_emails?.length) patch.group_emails = null; // o grupo passa a ser uma pessoa
   if (emailChanged) {
     const version = (r.token_version ?? 0) + 1;
     Object.assign(patch, {
@@ -320,7 +321,9 @@ async function notifyCurrent(sb: SupabaseClient, b: Bundle) {
       lang: r.language,
       brand,
     });
-    await deliver(sb, { to: r.email, subject: b.doc.subject || mail.subject, html: mail.html, kind: "invite", documentId: b.doc.id, recipientId: r.id });
+    for (const to of recipientEmails(r)) {
+      await deliver(sb, { to, subject: b.doc.subject || mail.subject, html: mail.html, kind: "invite", documentId: b.doc.id, recipientId: r.id });
+    }
     await sb
       .from("recipients")
       .update({
@@ -329,12 +332,17 @@ async function notifyCurrent(sb: SupabaseClient, b: Bundle) {
         status: r.status === "pending" ? "notified" : r.status,
       })
       .eq("id", r.id);
-    await audit(sb, b.doc.id, "recipient.notified", { recipientId: r.id, details: { email: r.email, step } });
+    await audit(sb, b.doc.id, "recipient.notified", { recipientId: r.id, details: { email: recipientEmails(r).join(", "), step } });
   }
 }
 
+/** Emails de um destinatário: o dele, ou os de todos os membros do grupo. */
+export function recipientEmails(r: Pick<RecipientRow, "email" | "group_emails">): string[] {
+  return r.group_emails?.length ? r.group_emails : r.email ? [r.email] : [];
+}
+
 export async function remind(sb: SupabaseClient, b: Bundle, r: RecipientRow): Promise<void> {
-  if (r.in_person || !r.email) return;
+  if (r.in_person || !recipientEmails(r).length) return;
   const step = b.doc.signature_mode === "qualified" ? b.doc.phase : "sign";
   const mail = inviteEmail({
     recipientName: r.name,
@@ -349,9 +357,11 @@ export async function remind(sb: SupabaseClient, b: Bundle, r: RecipientRow): Pr
     lang: r.language,
     brand: await brandFor(sb, b.doc.workspace_id),
   });
-  await deliver(sb, { to: r.email, subject: mail.subject, html: mail.html, kind: "reminder", documentId: b.doc.id, recipientId: r.id });
+  for (const to of recipientEmails(r)) {
+    await deliver(sb, { to, subject: mail.subject, html: mail.html, kind: "reminder", documentId: b.doc.id, recipientId: r.id });
+  }
   await sb.from("recipients").update({ reminded_at: new Date().toISOString() }).eq("id", r.id);
-  await audit(sb, b.doc.id, "recipient.reminded", { recipientId: r.id, details: { email: r.email } });
+  await audit(sb, b.doc.id, "recipient.reminded", { recipientId: r.id, details: { email: recipientEmails(r).join(", ") } });
 }
 
 /** Modo CC: grava os valores preenchidos no PDF e cria a versão a assinar. */
@@ -471,7 +481,10 @@ async function finalize(sb: SupabaseClient, b: Bundle) {
   const people = new Map<string, { name: string; lang: string; brand: Brand | null }>();
   people.set(b.owner.email.toLowerCase(), { name: ownerName(b), lang: "pt", brand: null });
   for (const r of b.recipients) {
-    if (r.status !== "declined" && r.email && !people.has(r.email.toLowerCase())) people.set(r.email.toLowerCase(), { name: r.name, lang: r.language ?? "pt", brand });
+    if (r.status === "declined") continue;
+    // Num grupo, recebe a cópia quem assinou (ou todos, se ainda ninguém assinou, ex.: cópia).
+    const to = r.signed_by ? [r.signed_by] : recipientEmails(r);
+    for (const e of to) if (!people.has(e.toLowerCase())) people.set(e.toLowerCase(), { name: r.name, lang: r.language ?? "pt", brand });
   }
   for (const [email, { name, lang, brand: br }] of people) {
     const mail = completedEmail(name, doc.title, doc.signature_mode, links, { lang, brand: br });

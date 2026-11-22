@@ -26,6 +26,8 @@ interface Body {
   path?: string;
   field_id?: string;
   file_name?: string;
+  /** grupo de assinatura: índice do membro escolhido */
+  member?: number;
   name?: string;
   email?: string;
 }
@@ -95,17 +97,18 @@ async function findRecipient(sb: SupabaseClient, token: string): Promise<Recipie
   return data;
 }
 
-async function requireSession(sb: SupabaseClient, r: RecipientRow, session?: string) {
+async function requireSession(sb: SupabaseClient, r: RecipientRow, session?: string): Promise<{ member_email: string | null }> {
   if (!session) throw new HttpError(401, "Confirme o código de acesso.", "session_required");
   const { data } = await sb
     .from("signer_sessions")
-    .select("id, expires_at")
+    .select("id, expires_at, member_email")
     .eq("recipient_id", r.id)
     .eq("token_hash", await sha256Hex(`session:${session}`))
     .maybeSingle();
   if (!data || new Date(data.expires_at) < new Date()) {
     throw new HttpError(401, "A sessão expirou. Peça um novo código.", "session_required");
   }
+  return { member_email: data.member_email ?? null };
 }
 
 function docState(b: Bundle, r: RecipientRow) {
@@ -153,7 +156,10 @@ Deno.serve(handler(async (req) => {
   switch (body.action) {
     case "start": {
       return json({
-        recipient: { name: r.name, email: r.email ? maskEmail(r.email) : "", status: r.status, in_person: !!r.in_person, language: r.language ?? "pt" },
+        recipient: {
+          name: r.name, email: r.email ? maskEmail(r.email) : "", status: r.status, in_person: !!r.in_person, language: r.language ?? "pt",
+          group: r.group_emails?.length ? r.group_emails.map(maskEmail) : null,
+        },
         brand: await brandFor(sb, b.doc.workspace_id),
         document: { title: b.doc.title, status: b.doc.status, sender: b.owner.full_name || b.owner.email, mode: b.doc.signature_mode },
       });
@@ -161,7 +167,14 @@ Deno.serve(handler(async (req) => {
 
     case "send-otp": {
       if (b.doc.status !== "in_progress") throw new HttpError(409, "Este documento já não está disponível para assinatura.", "not_active");
-      if (r.in_person || !r.email) throw new HttpError(403, "Esta assinatura é presencial: peça ao colaborador que a abra no dispositivo dele.", "in_person");
+      if (r.in_person || (!r.email && !r.group_emails?.length)) throw new HttpError(403, "Esta assinatura é presencial: peça ao colaborador que a abra no dispositivo dele.", "in_person");
+      // Grupo: o código vai para o membro escolhido.
+      let to = r.email;
+      if (r.group_emails?.length) {
+        const m = r.group_emails[body.member ?? -1];
+        if (!m) throw new HttpError(400, "Escolha o seu email.", "member_required");
+        to = m;
+      }
       const { data: prev } = await sb.from("signer_otps").select("sent_at").eq("recipient_id", r.id).maybeSingle();
       if (prev && Date.now() - new Date(prev.sent_at).getTime() < OTP_RESEND_MS) {
         throw new HttpError(429, "Aguarde um minuto antes de pedir outro código.", "rate_limited");
@@ -173,11 +186,12 @@ Deno.serve(handler(async (req) => {
         expires_at: new Date(Date.now() + OTP_TTL_MS).toISOString(),
         attempts: 0,
         sent_at: new Date().toISOString(),
+        member_email: r.group_emails?.length ? to : null,
       });
       const mail = otpEmail(r.name, b.doc.title, code, { lang: r.language, brand: await brandFor(sb, b.doc.workspace_id) });
-      await deliver(sb, { to: r.email, subject: mail.subject, html: mail.html, kind: "otp", documentId: b.doc.id, recipientId: r.id });
-      await audit(sb, b.doc.id, "recipient.otp_sent", { recipientId: r.id, ip, ua });
-      return json({ ok: true, email: maskEmail(r.email) });
+      await deliver(sb, { to, subject: mail.subject, html: mail.html, kind: "otp", documentId: b.doc.id, recipientId: r.id });
+      await audit(sb, b.doc.id, "recipient.otp_sent", { recipientId: r.id, ip, ua, details: r.group_emails?.length ? { member: to } : {} });
+      return json({ ok: true, email: maskEmail(to) });
     }
 
     case "verify-otp": {
@@ -196,6 +210,7 @@ Deno.serve(handler(async (req) => {
         recipient_id: r.id,
         token_hash: await sha256Hex(`session:${session}`),
         expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+        member_email: otp.member_email ?? null,
       });
       await audit(sb, b.doc.id, "recipient.authenticated", { recipientId: r.id, ip, ua });
       if (!r.viewed_at) {
@@ -210,7 +225,7 @@ Deno.serve(handler(async (req) => {
   }
 
   // A partir daqui é preciso sessão.
-  await requireSession(sb, r, body.session);
+  const sess = await requireSession(sb, r, body.session);
 
   switch (body.action) {
     case "load": {
@@ -269,8 +284,11 @@ Deno.serve(handler(async (req) => {
       if (b.doc.signature_mode === "simple") await fillAutoFields(sb, b, r, new Date(now));
       const valuesHash = await sha256Hex(JSON.stringify(editable.map((f) => [f.id, values[f.id] ?? null])));
       if (b.doc.signature_mode === "simple") {
-        await sb.from("recipients").update({ status: "signed", signed_at: now, filled_at: now, sign_ip: ip, sign_user_agent: ua }).eq("id", r.id);
-        await audit(sb, b.doc.id, "recipient.signed", { recipientId: r.id, ip, ua, details: { fields: editable.length, values_sha256: valuesHash } });
+        await sb.from("recipients").update({ status: "signed", signed_at: now, filled_at: now, sign_ip: ip, sign_user_agent: ua, signed_by: sess.member_email }).eq("id", r.id);
+        await audit(sb, b.doc.id, "recipient.signed", {
+          recipientId: r.id, ip, ua,
+          details: { fields: editable.length, values_sha256: valuesHash, ...(sess.member_email ? { signed_by: sess.member_email } : {}) },
+        });
       } else {
         await sb.from("recipients").update({ status: "filled", filled_at: now }).eq("id", r.id);
         await audit(sb, b.doc.id, "recipient.filled", { recipientId: r.id, ip, ua, details: { fields: editable.length, values_sha256: valuesHash } });

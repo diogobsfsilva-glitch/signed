@@ -143,12 +143,12 @@ interface TemplateOption {
   title: string;
   workspace_id: string;
   signature_mode: "simple" | "qualified";
-  recipients: { name: string; email: string; role: string }[];
+  recipients: { name: string; email: string; role: string; group_emails?: string[] | null }[];
 }
 
 /** Um modelo serve para link público se tiver exatamente um signatário sem email e os outros com email. */
 export function linkProblem(t: Pick<TemplateOption, "recipients">): string | null {
-  const open = t.recipients.filter((r) => !r.email);
+  const open = t.recipients.filter((r) => !r.email && !r.group_emails?.length);
   if (open.length !== 1 || open[0].role !== "signer") {
     return "O modelo tem de ter exatamente um signatário sem email (quem preenche o formulário); os outros papéis precisam de email fixo.";
   }
@@ -174,7 +174,7 @@ export function CreateLinkModal({ open, onClose, onCreated, templateId }: { open
     setUntil("");
     supabase
       .from("documents")
-      .select("id, title, workspace_id, signature_mode, recipients(name, email, role)")
+      .select("id, title, workspace_id, signature_mode, recipients(name, email, role, group_emails)")
       .eq("is_template", true)
       .order("title")
       .then(({ data }) => {

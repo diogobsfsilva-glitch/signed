@@ -61,7 +61,7 @@ export interface ValidationIssue {
 /** Validações antes de enviar. */
 export function validateForSend(
   doc: WorkflowDoc & { original_path: string | null; is_template?: boolean },
-  recipients: (R & { name: string; email: string; in_person?: boolean | null })[],
+  recipients: (R & { name: string; email: string; in_person?: boolean | null; group_emails?: string[] | null })[],
   fields: (F & { id: string; options: string[] | null; value?: string | null; label?: string | null; required?: boolean })[],
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
@@ -71,6 +71,20 @@ export function validateForSend(
   if (signers.length === 0) issues.push({ message: "Adicione pelo menos um signatário." });
   const emails = new Set<string>();
   for (const r of recipients) {
+    if (r.group_emails?.length) {
+      // Grupo de assinatura: pelo menos dois emails válidos, sem repetir ninguém do documento.
+      if (r.role !== "signer") issues.push({ message: `${r.name}: um grupo tem de assinar.` });
+      if (doc.signature_mode === "qualified") issues.push({ message: `${r.name}: os grupos de assinatura só existem na assinatura simples.` });
+      if (r.in_person) issues.push({ message: `${r.name}: um grupo não pode ser presencial.` });
+      if (r.group_emails.length < 2) issues.push({ message: `${r.name}: um grupo precisa de pelo menos dois emails.` });
+      for (const g of r.group_emails) {
+        const e = g.trim().toLowerCase();
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) issues.push({ message: `${r.name}: email inválido no grupo (${g}).` });
+        else if (emails.has(e)) issues.push({ message: `O email ${g} aparece repetido.` });
+        emails.add(e);
+      }
+      continue;
+    }
     const e = r.email.trim().toLowerCase();
     if (r.in_person && doc.signature_mode === "qualified") {
       issues.push({ message: `${r.name}: a assinatura presencial só existe na assinatura simples.` });

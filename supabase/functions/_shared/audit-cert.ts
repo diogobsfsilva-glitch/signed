@@ -22,7 +22,7 @@ export interface AuditCertificateInput {
   recipients: (Pick<
     RecipientRow,
     "id" | "name" | "email" | "role" | "signing_order" | "status" | "signed_at" | "sign_ip" | "cert_subject" | "cert_issuer" | "cert_serial" | "decline_reason"
-  > & { in_person?: boolean })[];
+  > & { in_person?: boolean; group_emails?: string[] | null; signed_by?: string | null })[];
   events: Pick<AuditEventRow, "event" | "created_at" | "recipient_id" | "ip" | "hash">[];
   chainIntact: boolean;
   /** Anexos carregados pelos signatários. */
@@ -139,6 +139,8 @@ export async function buildAuditCertificate(input: AuditCertificateInput): Promi
   for (const r of sorted) {
     w.text(r.email ? `${r.name} <${r.email}>` : r.name, { bold: true, size: 10 });
     if (r.in_person) w.kv("Assinatura", "Presencial, no dispositivo de um colaborador (ver histórico)");
+    if (r.group_emails?.length) w.kv("Grupo", r.group_emails.join(", "));
+    if (r.signed_by) w.kv("Assinado por", r.signed_by);
     w.kv("Papel", r.role === "signer" ? `Signatário (ordem ${r.signing_order})` : "Recebe cópia");
     if (r.role === "signer") w.kv("Estado", RECIPIENT_STATUS_LABELS[r.status]);
     if (r.signed_at) w.kv("Assinou em", formatLisbon(r.signed_at));

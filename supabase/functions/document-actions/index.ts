@@ -2,7 +2,7 @@
 
 import { clientIp, handler, HttpError, json, readJson, userAgent } from "../_shared/http.ts";
 import { canManage, requireUser } from "../_shared/auth.ts";
-import { advance, audit, createSignerSession, loadBundle, REASSIGNABLE, reassignRecipient, remind, sendDocument, serviceClient, signerToken } from "../_shared/engine.ts";
+import { advance, audit, createSignerSession, loadBundle, REASSIGNABLE, reassignRecipient, recipientEmails, remind, sendDocument, serviceClient, signerToken } from "../_shared/engine.ts";
 import { currentRecipients } from "../_shared/workflow.ts";
 
 interface Body {
@@ -49,7 +49,7 @@ Deno.serve(handler(async (req) => {
       if (!(await canManage(sb, user, b.doc))) throw new HttpError(403, "Sem permissão.");
       if (b.doc.status !== "in_progress") throw new HttpError(409, "O documento não está em curso.");
       const current = currentRecipients(b.doc, b.recipients, b.fields).map((r) => r.id);
-      const targets = b.recipients.filter((r) => current.includes(r.id) && !r.in_person && r.email && (!body.recipient_id || r.id === body.recipient_id));
+      const targets = b.recipients.filter((r) => current.includes(r.id) && !r.in_person && recipientEmails(r).length > 0 && (!body.recipient_id || r.id === body.recipient_id));
       if (!targets.length) throw new HttpError(409, "Não há ninguém a quem lembrar neste momento.");
       for (const r of targets) {
         if (r.reminded_at && Date.now() - new Date(r.reminded_at).getTime() < 10 * 60_000) {

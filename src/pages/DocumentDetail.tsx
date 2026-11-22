@@ -12,7 +12,7 @@ import { useAuth } from "../auth/AuthProvider";
 
 // O token do link nunca é lido pelo cliente (sem permissão nessa coluna).
 const RECIPIENT_COLUMNS =
-  "id, document_id, name, email, role, signing_order, civil_id, color, status, in_person, notified_at, viewed_at, filled_at, signed_at, declined_at, decline_reason, sign_ip, sign_user_agent, cert_subject, cert_issuer, cert_serial, cert_serial_number_attr, created_at";
+  "id, document_id, name, email, role, signing_order, civil_id, color, status, in_person, group_emails, signed_by, notified_at, viewed_at, filled_at, signed_at, declined_at, decline_reason, sign_ip, sign_user_agent, cert_subject, cert_issuer, cert_serial, cert_serial_number_attr, created_at";
 
 interface EmailRow {
   id: number;
@@ -202,8 +202,10 @@ export function DocumentDetail() {
                       <p className="truncate text-sm font-medium">{r.name}</p>
                       {r.role === "signer" ? <RecipientBadge status={r.status} /> : <span className="text-xs text-slate-400">cópia</span>}
                     </div>
-                    <p className="truncate text-xs text-slate-500">{r.email}</p>
+                    {r.email && <p className="truncate text-xs text-slate-500">{r.email}</p>}
                     {r.in_person && r.role === "signer" && <p className="text-xs text-slate-500">Assinatura presencial</p>}
+                    {r.group_emails?.length ? <p className="truncate text-xs text-slate-500" title={r.group_emails.join(", ")}>Grupo: {r.group_emails.join(", ")}</p> : null}
+                    {r.signed_by && <p className="truncate text-xs text-emerald-700">Assinado por {r.signed_by}</p>}
                     {r.in_person && doc.status === "in_progress" && ["notified", "viewed"].includes(r.status) && (
                       <button
                         className="btn-primary mt-1.5 px-3 py-1 text-xs"
