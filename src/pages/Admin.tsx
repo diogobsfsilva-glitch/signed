@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useAuth, type Profile } from "../auth/AuthProvider";
-import { Alert, FullPageSpinner, Modal, PlusIcon, TrashIcon, toast } from "../components/ui";
+import { Alert, FullPageSpinner, Modal, PlusIcon, Spinner, TrashIcon, toast } from "../components/ui";
+import { BrandMark, luminance } from "../components/Brand";
 import { errorMessage, fmtDate } from "../lib/format";
 
 type Tab = "workspaces" | "users" | "settings";
@@ -11,6 +12,8 @@ interface Ws {
   name: string;
   created_at: string;
   workspace_members: { user_id: string; role: "admin" | "member" }[];
+  brand_color: string | null;
+  logo_path: string | null;
 }
 
 export function Admin() {
@@ -48,7 +51,7 @@ function Workspaces() {
 
   async function load() {
     const [{ data: ws }, { data: u }] = await Promise.all([
-      supabase.from("workspaces").select("id, name, created_at, workspace_members(user_id, role)").order("name"),
+      supabase.from("workspaces").select("id, name, created_at, brand_color, logo_path, workspace_members(user_id, role)").order("name"),
       supabase.from("profiles").select("id, email, full_name, role, active").order("full_name"),
     ]);
     setList((ws as Ws[]) ?? []);
@@ -100,7 +103,12 @@ function Workspaces() {
       </Modal>
 
       <Modal open={!!current} onClose={() => setOpen(null)} title={current?.name ?? ""} wide>
-        {current && <Members ws={current} users={users} onChange={() => { load(); refresh(); }} />}
+        {current && (
+          <div className="space-y-6">
+            <Members ws={current} users={users} onChange={() => { load(); refresh(); }} />
+            <BrandSettings ws={current} onChange={load} />
+          </div>
+        )}
       </Modal>
     </div>
   );
@@ -257,5 +265,78 @@ function Settings() {
       {saved && <Alert kind="success">Definições guardadas.</Alert>}
       <button className="btn-primary">Guardar</button>
     </form>
+  );
+}
+
+/** Marca do hotel: cor e logótipo usados na página de assinatura, no formulário público e nos emails. */
+function BrandSettings({ ws, onChange }: { ws: Ws; onChange: () => void }) {
+  const [color, setColor] = useState(ws.brand_color ?? "#0f2445");
+  const [busy, setBusy] = useState(false);
+  const logoUrl = ws.logo_path ? supabase.storage.from("branding").getPublicUrl(ws.logo_path).data.publicUrl : null;
+  const tooLight = luminance(color) > 0.45;
+
+  async function save(patch: Partial<Pick<Ws, "brand_color" | "logo_path">>) {
+    setBusy(true);
+    const { error } = await supabase.from("workspaces").update(patch).eq("id", ws.id);
+    setBusy(false);
+    if (error) toast(errorMessage(error), "error");
+    else {
+      toast("Marca atualizada.");
+      onChange();
+    }
+  }
+
+  async function upload(file: File | undefined) {
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) return toast("Use PNG, JPG ou WebP.", "error");
+    if (file.size > 1024 * 1024) return toast("O logótipo tem de ter menos de 1 MB.", "error");
+    setBusy(true);
+    const ext = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
+    const path = `${ws.id}/logo-${Date.now()}.${ext}`;
+    const { error } = await supabase.storage.from("branding").upload(path, file, { contentType: file.type });
+    setBusy(false);
+    if (error) return toast(errorMessage(error), "error");
+    if (ws.logo_path) await supabase.storage.from("branding").remove([ws.logo_path]);
+    await save({ logo_path: path });
+  }
+
+  return (
+    <div className="border-t border-slate-200 pt-5">
+      <p className="label">Marca do hotel</p>
+      <p className="mb-3 text-xs text-slate-500">Aparece na página de assinatura, nos links públicos e nos emails aos signatários dos documentos deste espaço.</p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-3">
+          <div>
+            <label className="label text-xs" htmlFor="b-color">Cor principal (botões)</label>
+            <div className="flex items-center gap-2">
+              <input id="b-color" type="color" className="h-9 w-12 cursor-pointer rounded border border-slate-200" value={color} onChange={(e) => setColor(e.target.value)} />
+              <input className="input w-28 font-mono" value={color} maxLength={7} onChange={(e) => setColor(e.target.value)} aria-label="Cor em hexadecimal" />
+              <button className="btn-secondary" disabled={busy || !/^#[0-9a-fA-F]{6}$/.test(color) || color === ws.brand_color} onClick={() => save({ brand_color: color.toLowerCase() })}>Guardar</button>
+            </div>
+            {tooLight && <p className="mt-1 text-xs text-amber-700">Cor demasiado clara: o texto branco dos botões fica difícil de ler.</p>}
+          </div>
+          <div>
+            <label className="label text-xs">Logótipo (PNG, JPG ou WebP, até 1 MB)</label>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="btn-secondary cursor-pointer">
+                {busy ? <Spinner className="h-4 w-4" /> : null} Carregar logótipo
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(e) => upload(e.target.files?.[0])} disabled={busy} />
+              </label>
+              {ws.logo_path && <button className="btn-ghost text-red-700" disabled={busy} onClick={async () => { await supabase.storage.from("branding").remove([ws.logo_path!]); await save({ logo_path: null }); }}>Remover</button>}
+            </div>
+          </div>
+          {(ws.brand_color || ws.logo_path) && (
+            <button className="text-xs text-slate-500 underline" disabled={busy} onClick={() => save({ brand_color: null })}>Repor a cor do Signed</button>
+          )}
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <p className="mb-2 text-xs text-slate-500">Pré-visualização</p>
+          <div className="rounded-md bg-white p-3 shadow-sm" style={{ borderTop: `3px solid ${color}` }}>
+            <BrandMark brand={{ name: ws.name, color, logoUrl }} />
+            <button className="btn mt-3 w-full text-white" style={{ background: color }}>Assinar documento</button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -7,6 +7,7 @@ export interface RecipientOverride {
   name?: string;
   email?: string;
   civil_id?: string | null;
+  language?: string;
 }
 
 /**

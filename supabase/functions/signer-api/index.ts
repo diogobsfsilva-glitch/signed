@@ -2,7 +2,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { clientIp, handler, HttpError, json, readJson, userAgent } from "../_shared/http.ts";
-import { advance, audit, BUCKET, type Bundle, docFolder, download, fillAutoFields, loadBundle, REASSIGNABLE, reassignRecipient, serviceClient, tokenHash, upload } from "../_shared/engine.ts";
+import { advance, audit, brandFor, BUCKET, type Bundle, docFolder, download, fillAutoFields, loadBundle, REASSIGNABLE, reassignRecipient, serviceClient, tokenHash, upload } from "../_shared/engine.ts";
 import { ccRejectedEmail, declinedEmail, delegatedEmail, deliver, otpEmail } from "../_shared/email.ts";
 import { currentRecipients } from "../_shared/workflow.ts";
 import { validateFieldValues } from "../_shared/workflow.ts";
@@ -153,7 +153,8 @@ Deno.serve(handler(async (req) => {
   switch (body.action) {
     case "start": {
       return json({
-        recipient: { name: r.name, email: r.email ? maskEmail(r.email) : "", status: r.status, in_person: !!r.in_person },
+        recipient: { name: r.name, email: r.email ? maskEmail(r.email) : "", status: r.status, in_person: !!r.in_person, language: r.language ?? "pt" },
+        brand: await brandFor(sb, b.doc.workspace_id),
         document: { title: b.doc.title, status: b.doc.status, sender: b.owner.full_name || b.owner.email, mode: b.doc.signature_mode },
       });
     }
@@ -173,7 +174,7 @@ Deno.serve(handler(async (req) => {
         attempts: 0,
         sent_at: new Date().toISOString(),
       });
-      const mail = otpEmail(r.name, b.doc.title, code);
+      const mail = otpEmail(r.name, b.doc.title, code, { lang: r.language, brand: await brandFor(sb, b.doc.workspace_id) });
       await deliver(sb, { to: r.email, subject: mail.subject, html: mail.html, kind: "otp", documentId: b.doc.id, recipientId: r.id });
       await audit(sb, b.doc.id, "recipient.otp_sent", { recipientId: r.id, ip, ua });
       return json({ ok: true, email: maskEmail(r.email) });

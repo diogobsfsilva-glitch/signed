@@ -55,11 +55,24 @@ export function normalizeKey(s: string): string {
 const NAME_KEYS = ["nome", "nome completo", "name"];
 const EMAIL_KEYS = ["email", "e mail", "correio eletronico"];
 const CIVIL_KEYS = ["nic", "n identificacao civil", "numero de identificacao civil", "identificacao civil", "cc"];
+const LANG_KEYS = ["idioma", "lingua", "language", "lang"];
+
+/** "EN", "inglês", "English"… -> "en". null se não for reconhecido. */
+export function parseLanguage(v: string): "pt" | "en" | "es" | "fr" | null {
+  const k = normalizeKey(v);
+  if (!k) return null;
+  if (["pt", "portugues", "portuguese", "portugal"].includes(k)) return "pt";
+  if (["en", "ingles", "english", "uk", "gb"].includes(k)) return "en";
+  if (["es", "espanhol", "espanol", "spanish", "castellano"].includes(k)) return "es";
+  if (["fr", "frances", "francais", "french"].includes(k)) return "fr";
+  return null;
+}
 
 export interface CsvColumns {
   name: number;
   email: number;
   civilId: number;
+  language: number;
   /** índice da coluna -> rótulo normalizado do campo */
   fields: Map<number, string>;
   /** colunas que não correspondem a nada (aviso) */
@@ -69,12 +82,13 @@ export interface CsvColumns {
 /** Identifica as colunas do cabeçalho: nome, email, nº de identificação civil e campos pelo rótulo. */
 export function mapColumns(header: string[], fieldLabels: string[]): CsvColumns {
   const labels = new Set(fieldLabels.map(normalizeKey));
-  const cols: CsvColumns = { name: -1, email: -1, civilId: -1, fields: new Map(), unknown: [] };
+  const cols: CsvColumns = { name: -1, email: -1, civilId: -1, language: -1, fields: new Map(), unknown: [] };
   header.forEach((h, i) => {
     const k = normalizeKey(h);
     if (cols.name < 0 && NAME_KEYS.includes(k)) cols.name = i;
     else if (cols.email < 0 && EMAIL_KEYS.includes(k)) cols.email = i;
     else if (cols.civilId < 0 && CIVIL_KEYS.includes(k)) cols.civilId = i;
+    else if (cols.language < 0 && LANG_KEYS.includes(k)) cols.language = i;
     else if (labels.has(k)) cols.fields.set(i, k);
     else if (k) cols.unknown.push(h);
   });

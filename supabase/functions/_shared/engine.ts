@@ -8,7 +8,7 @@ import { allSigned, currentRecipients, fillPhaseDone, validateForSend } from "./
 import { assertValidPdf, flattenFields } from "./pdf.ts";
 import { loadSealKey, type SealKey, sealPdf } from "./pades-sign.ts";
 import { buildAuditCertificate } from "./audit-cert.ts";
-import { completedEmail, deliver, inviteEmail } from "./email.ts";
+import { type Brand, completedEmail, deliver, inviteEmail } from "./email.ts";
 import { m365Config, uploadToSharePoint } from "./m365.ts";
 import { randomToken, sha256Hex, toBase64 } from "./util.ts";
 import { env, HttpError } from "./http.ts";
@@ -226,6 +226,14 @@ export function docFolder(doc: Pick<DocumentRow, "workspace_id" | "id">): string
   return `${doc.workspace_id}/${doc.id}`;
 }
 
+/** Marca do hotel (espaço de trabalho), se tiver cor ou logótipo definidos. */
+export async function brandFor(sb: SupabaseClient, workspaceId: string): Promise<Brand | null> {
+  const { data } = await sb.from("workspaces").select("name, brand_color, logo_path").eq("id", workspaceId).maybeSingle();
+  if (!data || (!data.brand_color && !data.logo_path)) return null;
+  const logoUrl = data.logo_path ? publicUrl(sb.storage.from("branding").getPublicUrl(data.logo_path).data.publicUrl) : null;
+  return { name: data.name, color: data.brand_color ?? null, logoUrl };
+}
+
 function ownerName(b: Bundle): string {
   return b.owner.full_name || b.owner.email;
 }
@@ -290,6 +298,7 @@ export async function advance(sb: SupabaseClient, docId: string): Promise<void> 
 
 async function notifyCurrent(sb: SupabaseClient, b: Bundle) {
   const current = currentRecipients(b.doc, b.recipients, b.fields);
+  const brand = current.some((r) => !r.in_person) ? await brandFor(sb, b.doc.workspace_id) : null;
   for (const r of current) {
     if (r.notified_phase === b.doc.phase && r.notified_at) continue;
     const step = b.doc.signature_mode === "qualified" ? b.doc.phase : "sign";
@@ -308,6 +317,8 @@ async function notifyCurrent(sb: SupabaseClient, b: Bundle) {
       mode: b.doc.signature_mode,
       step,
       expiresAt: b.doc.expires_at,
+      lang: r.language,
+      brand,
     });
     await deliver(sb, { to: r.email, subject: b.doc.subject || mail.subject, html: mail.html, kind: "invite", documentId: b.doc.id, recipientId: r.id });
     await sb
@@ -335,6 +346,8 @@ export async function remind(sb: SupabaseClient, b: Bundle, r: RecipientRow): Pr
     step,
     expiresAt: b.doc.expires_at,
     reminder: true,
+    lang: r.language,
+    brand: await brandFor(sb, b.doc.workspace_id),
   });
   await deliver(sb, { to: r.email, subject: mail.subject, html: mail.html, kind: "reminder", documentId: b.doc.id, recipientId: r.id });
   await sb.from("recipients").update({ reminded_at: new Date().toISOString() }).eq("id", r.id);
@@ -436,7 +449,7 @@ async function finalize(sb: SupabaseClient, b: Bundle) {
   const finalName = `${base}${doc.signature_mode === "qualified" ? "_assinado" : ""}.pdf`;
   const certName = `${base}_certificado.pdf`;
   const total = finalBytes.length + cert.length;
-  let links: { label: string; url: string }[] = [];
+  let links: { kind: "doc" | "cert"; url: string }[] = [];
   const attachments = total < 2_800_000
     ? [
       { name: finalName, contentType: "application/pdf", bytes: finalBytes },
@@ -450,15 +463,18 @@ async function finalize(sb: SupabaseClient, b: Bundle) {
       sb.storage.from(BUCKET).createSignedUrl(auditPath, week, { download: certName }),
     ]);
     links = [
-      { label: "Documento", url: publicUrl(f.data?.signedUrl) },
-      { label: "Certificado de conclusão", url: publicUrl(c.data?.signedUrl) },
+      { kind: "doc", url: publicUrl(f.data?.signedUrl) },
+      { kind: "cert", url: publicUrl(c.data?.signedUrl) },
     ];
   }
-  const people = new Map<string, string>();
-  people.set(b.owner.email.toLowerCase(), ownerName(b));
-  for (const r of b.recipients) if (r.status !== "declined" && r.email) people.set(r.email.toLowerCase(), r.name);
-  for (const [email, name] of people) {
-    const mail = completedEmail(name, doc.title, doc.signature_mode, links);
+  const brand = await brandFor(sb, doc.workspace_id);
+  const people = new Map<string, { name: string; lang: string; brand: Brand | null }>();
+  people.set(b.owner.email.toLowerCase(), { name: ownerName(b), lang: "pt", brand: null });
+  for (const r of b.recipients) {
+    if (r.status !== "declined" && r.email && !people.has(r.email.toLowerCase())) people.set(r.email.toLowerCase(), { name: r.name, lang: r.language ?? "pt", brand });
+  }
+  for (const [email, { name, lang, brand: br }] of people) {
+    const mail = completedEmail(name, doc.title, doc.signature_mode, links, { lang, brand: br });
     await deliver(sb, { to: email, subject: mail.subject, html: mail.html, kind: "completed", documentId: doc.id, attachments });
   }
 

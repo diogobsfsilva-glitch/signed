@@ -73,6 +73,8 @@ export interface RecipientRow {
   token_version?: number;
   /** Assina presencialmente no dispositivo de um colaborador (sem email nem código). */
   in_person?: boolean;
+  /** Idioma da página de assinatura e dos emails (pt, en, es, fr). */
+  language?: string;
   notified_at: string | null;
   notified_phase: DocPhase | null;
   reminded_at: string | null;

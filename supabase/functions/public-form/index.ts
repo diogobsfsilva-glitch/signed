@@ -2,13 +2,14 @@
 // cria a sua cópia do modelo, indica o nome e o email e assina.
 
 import { clientIp, handler, HttpError, json, readJson, userAgent } from "../_shared/http.ts";
-import { audit, BUCKET, createSignerSession, loadBundle, sendDocument, serviceClient, signerToken } from "../_shared/engine.ts";
+import { audit, brandFor, BUCKET, createSignerSession, loadBundle, sendDocument, serviceClient, signerToken } from "../_shared/engine.ts";
 
 interface Body {
   action: "info" | "start";
   slug: string;
   name?: string;
   email?: string;
+  language?: string;
 }
 
 // Por link e por IP. Generoso porque os hóspedes no Wi-Fi do hotel saem todos pelo mesmo IP;
@@ -50,6 +51,7 @@ Deno.serve(handler(async (req) => {
         mode: tpl?.signature_mode ?? "simple",
         message: tpl?.message ?? null,
         organization: ws?.name ?? null,
+        brand: await brandFor(sb, link.workspace_id),
       });
     }
 
@@ -80,6 +82,9 @@ Deno.serve(handler(async (req) => {
         throw error;
       }
       const row = (data as { new_document_id: string; new_original_path: string; template_path: string; recipient_id: string }[])[0];
+      if (["en", "es", "fr"].includes(body.language ?? "")) {
+        await sb.from("recipients").update({ language: body.language }).eq("id", row.recipient_id);
+      }
       const cp = await sb.storage.from(BUCKET).copy(row.template_path, row.new_original_path);
       if (cp.error) throw new Error(`Cópia do PDF: ${cp.error.message}`);
       await sendDocument(sb, await loadBundle(sb, row.new_document_id), { ip, ua });

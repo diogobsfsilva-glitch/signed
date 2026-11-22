@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useT } from "../lib/signer-i18n";
 import "@fontsource/dancing-script/600.css";
 import { Modal } from "./ui";
 
@@ -139,7 +140,8 @@ export function SignaturePad({
     if (png) onDone(png);
   }
 
-  const title = kind === "initials" ? "As suas iniciais" : "A sua assinatura";
+  const { t } = useT();
+  const title = kind === "initials" ? t("sp_initials") : t("sp_signature");
   const canConfirm = (tab === "draw" && !empty) || (tab === "type" && typed.trim()) || (tab === "upload" && uploaded);
 
   return (
@@ -147,9 +149,9 @@ export function SignaturePad({
       <div className="mb-3 inline-flex rounded-lg bg-slate-100 p-1 text-sm" role="tablist">
         {(
           [
-            ["draw", "Desenhar"],
-            ["type", "Escrever"],
-            ["upload", "Carregar imagem"],
+            ["draw", t("sp_draw")],
+            ["type", t("sp_type")],
+            ["upload", t("sp_upload")],
           ] as [Tab, string][]
         ).map(([t, l]) => (
           <button
@@ -194,7 +196,7 @@ export function SignaturePad({
             }}
           />
           <div className="mt-2 flex items-center justify-between">
-            <p className="muted">Use o rato, o dedo ou uma caneta.</p>
+            <p className="muted">{t("sp_draw_hint")}</p>
             <button
               className="btn-ghost"
               onClick={() => {
@@ -203,7 +205,7 @@ export function SignaturePad({
                 setEmpty(true);
               }}
             >
-              Limpar
+              {t("sp_clear")}
             </button>
           </div>
         </div>
@@ -211,7 +213,7 @@ export function SignaturePad({
 
       {tab === "type" && (
         <div>
-          <input className="input" value={typed} onChange={(e) => setTyped(e.target.value)} maxLength={60} aria-label="Nome" />
+          <input className="input" value={typed} onChange={(e) => setTyped(e.target.value)} maxLength={60} aria-label={t("sp_name")} />
           <div className="mt-3 flex h-36 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white px-4">
             <span className="truncate font-script text-5xl text-navy-900">{typed || " "}</span>
           </div>
@@ -221,7 +223,7 @@ export function SignaturePad({
       {tab === "upload" && (
         <div>
           <label className="flex h-36 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 text-sm text-slate-600 hover:bg-slate-100">
-            {uploaded ? <img src={uploaded} alt="Assinatura carregada" className="max-h-28" /> : "Escolha uma imagem PNG ou JPG da sua assinatura"}
+            {uploaded ? <img src={uploaded} alt={t("sp_signature")} className="max-h-28" /> : t("sp_upload_hint")}
             <input type="file" accept="image/png,image/jpeg" className="sr-only" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
           </label>
         </div>
@@ -229,10 +231,10 @@ export function SignaturePad({
 
       <div className="mt-5 flex justify-end gap-2">
         <button className="btn-secondary" onClick={onClose}>
-          Cancelar
+          {t("cancel")}
         </button>
         <button className="btn-primary" disabled={!canConfirm} onClick={confirm}>
-          Usar {kind === "initials" ? "iniciais" : "assinatura"}
+          {kind === "initials" ? t("sp_use_initials") : t("sp_use_signature")}
         </button>
       </div>
     </Modal>

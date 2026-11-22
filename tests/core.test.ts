@@ -430,3 +430,32 @@ describe("envio em massa: CSV", () => {
     expect(cellToValue("text", "  ", null)).toEqual({ value: null });
   });
 });
+
+describe("idiomas", () => {
+  it("reconhece o idioma no CSV", async () => {
+    const { parseLanguage } = await import("../src/lib/csv.ts");
+    expect(["EN", "Inglês", "english", "Español", "francês", "PT", "xx"].map(parseLanguage)).toEqual(["en", "en", "en", "es", "fr", "pt", null]);
+  });
+
+  it("emails ao signatário traduzidos e com a marca do hotel", async () => {
+    const { inviteEmail, otpEmail, completedEmail } = await import("../supabase/functions/_shared/email.ts");
+    const brand = { name: "Altis Grand Hotel", color: "#7a1f2b", logoUrl: "https://exemplo.pt/logo.png" };
+    const en = inviteEmail({ recipientName: "John", senderName: "Diogo", title: "Spa waiver", message: null, url: "https://x/s/abc", mode: "simple", step: "sign", expiresAt: null, lang: "en", brand });
+    expect(en.subject).toBe("Diogo asks you to sign: Spa waiver");
+    expect(en.html).toContain('lang="en"');
+    expect(en.html).toContain("#7a1f2b");
+    expect(en.html).toContain("logo.png");
+    expect(otpEmail("Juan", "Contrato", "123456", { lang: "es" }).subject).toBe("Código de acceso de Signed: 123456");
+    expect(completedEmail("Marie", "Contrat", "simple", [], { lang: "fr" }).subject).toBe("Terminé : Contrat");
+    // Sem idioma: português e sem marca.
+    const pt = inviteEmail({ recipientName: "Ana", senderName: "Diogo", title: "X", message: null, url: "u", mode: "simple", step: "sign", expiresAt: null });
+    expect(pt.subject).toBe("Diogo pede-lhe para assinar: X");
+    expect(pt.html).toContain(">Signed<");
+  });
+
+  it("dicionários completos nas 4 línguas", async () => {
+    const { DICTS } = await import("../src/lib/signer-i18n.ts");
+    const keys = Object.keys(DICTS.pt).sort();
+    for (const l of ["en", "es", "fr"] as const) expect(Object.keys(DICTS[l]).sort()).toEqual(keys);
+  });
+});

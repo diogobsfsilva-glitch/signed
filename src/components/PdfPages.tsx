@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type MouseEvent } from "react";
+import { useT } from "../lib/signer-i18n";
 import { openPdf, type PdfDoc } from "../lib/pdf";
 import { Alert, Spinner } from "./ui";
 
@@ -14,6 +15,7 @@ interface Props {
 /** Mostra todas as páginas de um PDF à largura do contentor. */
 export function PdfPages({ src, overlay, onPageClick, onLoaded, cursor }: Props) {
   const wrap = useRef<HTMLDivElement>(null);
+  const { t } = useT();
   const [doc, setDoc] = useState<PdfDoc | null>(null);
   const [sizes, setSizes] = useState<{ w: number; h: number }[]>([]);
   const [width, setWidth] = useState(0);
@@ -36,7 +38,7 @@ export function PdfPages({ src, overlay, onPageClick, onLoaded, cursor }: Props)
         setDoc(d);
         onLoaded?.(d);
       })
-      .catch(() => !cancelled && setError("Não foi possível abrir o PDF."));
+      .catch(() => !cancelled && setError(t("pdf_error")));
     return () => {
       cancelled = true;
     };

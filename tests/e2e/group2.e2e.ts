@@ -199,3 +199,48 @@ describe("links públicos", () => {
     expect((await owner.rpc("instantiate_public", { p_slug: slug, p_name: "x", p_email: "x@x.pt" })).error).toBeTruthy();
   });
 });
+
+describe("idiomas e marca do hotel", () => {
+  it("convite e código no idioma do signatário, com a marca do espaço de trabalho", async () => {
+    // Marca: só o administrador do espaço carrega o logótipo.
+    const png = Uint8Array.from(atob(PNG.split(",")[1]), (c) => c.charCodeAt(0));
+    const path = `${ws}/logo-${Date.now()}.png`;
+    expect((await owner.storage.from("branding").upload(path, png, { contentType: "image/png" })).error).toBeNull();
+    expect((await owner.from("workspaces").update({ brand_color: "#7a1f2b", logo_path: path }).eq("id", ws)).error).toBeNull();
+    expect((await owner.from("workspaces").update({ logo_path: `${crypto.randomUUID()}/x.png` }).eq("id", ws)).error).toBeTruthy();
+    await admin.auth.admin.createUser({ email: "membro.brand@altishotels.com", password: "Teste12345!", email_confirm: true }).catch(() => {});
+    const member = createClient(URL_, ANON, { auth: { persistSession: false } });
+    await member.auth.signInWithPassword({ email: "membro.brand@altishotels.com", password: "Teste12345!" });
+    await admin.from("profiles").update({ role: "user" }).eq("email", "membro.brand@altishotels.com");
+    expect((await member.storage.from("branding").upload(`${ws}/hack.png`, png, { contentType: "image/png" })).error).toBeTruthy();
+
+    const { data: doc } = await owner.from("documents").insert({ workspace_id: ws, owner_id: ownerId, title: "Pool rules" }).select().single();
+    await pdfPath(doc!.id);
+    const g = crypto.randomUUID();
+    const email = `john.${Date.now()}@example.com`;
+    await owner.from("recipients").insert({ id: g, document_id: doc!.id, name: "John Smith", email, role: "signer", signing_order: 1, language: "en" });
+    await owner.from("fields").insert({ document_id: doc!.id, recipient_id: g, type: "signature", page: 1, x: 0.1, y: 0.8, w: 0.3, h: 0.08 });
+    expect((await fn("document-actions", { action: "send", document_id: doc!.id }, jwt)).ok).toBe(true);
+    const { data: inv } = await admin.from("email_log").select("subject").eq("to_email", email).eq("kind", "invite").single();
+    expect(inv!.subject).toBe("Diogo Silva asks you to sign: Pool rules");
+    const token = /\/s\/([A-Za-z0-9_-]+)/.exec(await lastEmail(email, "invite"))![1];
+    const st = await fn("signer-api", { action: "start", token });
+    expect(st.recipient.language).toBe("en");
+    expect(st.brand).toMatchObject({ color: "#7a1f2b" });
+    expect(st.brand.logoUrl).toContain(path);
+    await fn("signer-api", { action: "send-otp", token });
+    const { data: otp } = await admin.from("email_log").select("subject").eq("to_email", email).eq("kind", "otp").single();
+    expect(otp!.subject).toMatch(/^Signed access code: \d{6}$/);
+    await owner.from("workspaces").update({ brand_color: null, logo_path: null }).eq("id", ws);
+  });
+
+  it("formulário público: idioma escolhido passa para o convite", async () => {
+    const { data: tpl } = await owner.from("documents").select("id").eq("title", "Termo do spa").eq("is_template", true).limit(1).single();
+    const { data: link } = await owner.from("public_links").insert({ workspace_id: ws, owner_id: ownerId, template_id: tpl!.id, title: "Spa (ES)" }).select().single();
+    const email = `ana.${Date.now()}@ejemplo.es`;
+    const r = await fn("public-form", { action: "start", slug: link!.slug, name: "Ana García", email, language: "es" });
+    expect(r.token).toBeTruthy();
+    const { data: inv } = await admin.from("email_log").select("subject").eq("to_email", email).eq("kind", "invite").single();
+    expect(inv!.subject).toMatch(/le pide firmar/);
+  });
+});

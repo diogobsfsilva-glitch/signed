@@ -5,7 +5,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthProvider";
 import { documentAction } from "../lib/api";
 import { instantiate } from "../lib/templates";
-import { cellToValue, mapColumns, normalizeKey, parseCsv, toCsv } from "../lib/csv";
+import { cellToValue, mapColumns, normalizeKey, parseCsv, parseLanguage, toCsv } from "../lib/csv";
 import { isPrefillable, type FieldType } from "../../supabase/functions/_shared/types";
 import { Alert, CheckIcon, DownloadIcon, FullPageSpinner, ModeBadge, Spinner, UploadIcon } from "../components/ui";
 import { errorMessage } from "../lib/format";
@@ -30,6 +30,7 @@ interface Row {
   name: string;
   email: string;
   civilId: string | null;
+  language: string | null;
   /** rótulo do campo (como no modelo) -> valor */
   values: Record<string, string | null>;
   errors: string[];
@@ -96,8 +97,8 @@ export function BulkSend() {
   const failed = Object.entries(results).filter(([, r]) => r.state === "failed");
 
   function downloadExample() {
-    const header = ["nome", "email", ...(qualified ? ["NIC"] : []), ...[...prefill.values()].map((p) => p.label)];
-    const example = ["Joana Reis", "joana.reis@exemplo.pt", ...(qualified ? ["12345678"] : []), ...[...prefill.values()].map((p) =>
+    const header = ["nome", "email", "idioma", ...(qualified ? ["NIC"] : []), ...[...prefill.values()].map((p) => p.label)];
+    const example = ["Joana Reis", "joana.reis@exemplo.pt", "PT", ...(qualified ? ["12345678"] : []), ...[...prefill.values()].map((p) =>
       p.type === "date" ? "01/01/2027" : p.type === "checkbox" ? "sim" : p.options?.[0] ?? "")];
     const blob = new Blob([toCsv([header, example])], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
@@ -141,6 +142,11 @@ export function BulkSend() {
         civilId = cells[cols.civilId].replace(/\D/g, "");
         if (civilId.length < 6 || civilId.length > 9) errors.push("nº de identificação civil inválido");
       }
+      let language: string | null = null;
+      if (cols.language >= 0 && cells[cols.language]) {
+        language = parseLanguage(cells[cols.language]);
+        if (!language) errors.push(`idioma desconhecido «${cells[cols.language]}» (use PT, EN, ES ou FR)`);
+      }
       const values: Record<string, string | null> = {};
       for (const [idx, key] of cols.fields) {
         const p = prefill.get(key)!;
@@ -148,7 +154,7 @@ export function BulkSend() {
         if (r.error) errors.push(`${p.label}: ${r.error}`);
         else if (r.value !== null) values[p.label] = r.value;
       }
-      return { line: i + 2, name, email, civilId, values, errors };
+      return { line: i + 2, name, email, civilId, language, values, errors };
     });
     setWarnings(w);
     setRows(parsed);
@@ -164,7 +170,7 @@ export function BulkSend() {
           asTemplate: false,
           title: pattern.replace(/\{nome\}/gi, row.name).slice(0, 200) || tpl!.title,
           workspaceId: tpl!.workspace_id,
-          recipients: [{ id: varId, name: row.name, email: row.email, civil_id: row.civilId }],
+          recipients: [{ id: varId, name: row.name, email: row.email, civil_id: row.civilId, ...(row.language ? { language: row.language } : {}) }],
           batchId: batch,
         });
         for (const [label, value] of Object.entries(row.values)) {
@@ -257,7 +263,7 @@ export function BulkSend() {
             <h2 className="font-semibold">2. Lista de pessoas (CSV)</h2>
             <p className="mt-1 text-sm text-slate-600">
               Colunas obrigatórias: <strong>nome</strong> e <strong>email</strong>
-              {qualified && <>; opcional: <strong>NIC</strong> (nº de identificação civil)</>}
+              ; opcional: <strong>idioma</strong> (PT, EN, ES ou FR){qualified && <>, <strong>NIC</strong> (nº de identificação civil)</>}
               {prefill.size > 0 && <>. Pode preencher também: {[...prefill.values()].map((p) => <strong key={p.label}>{p.label}</strong>).reduce<React.ReactNode[]>((a, x, i) => (i ? [...a, ", ", x] : [x]), [])}</>}.
               {" "}No Excel: <em>Guardar como → CSV (separado por vírgulas)</em>.
             </p>

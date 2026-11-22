@@ -4,19 +4,21 @@ import { createClient } from "@supabase/supabase-js";
 import { ApiError, signerApi } from "../lib/api";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, BUCKET } from "../lib/supabase";
 import type { FieldType } from "../../supabase/functions/_shared/types";
-import { FIELD_LABELS, isAutoField } from "../../supabase/functions/_shared/types";
+import { isAutoField } from "../../supabase/functions/_shared/types";
 import { PdfPages } from "../components/PdfPages";
+import { BrandMark, brandStyle, type BrandInfo } from "../components/Brand";
 import { SignaturePad } from "../components/SignaturePad";
 import { FieldValue } from "../components/FieldBox";
 import { Alert, CheckIcon, DownloadIcon, FullPageSpinner, IdIcon, Logo, Modal, Spinner, UploadIcon } from "../components/ui";
-import { errorMessage } from "../lib/format";
+import { browserLang, I18n, isLang, LANGS, translator, useT, type Lang } from "../lib/signer-i18n";
 
 // Cliente sem sessão (o signatário não tem conta).
 const anon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false, storageKey: "signed-signer" } });
 
 interface StartInfo {
-  recipient: { name: string; email: string; status: string; in_person?: boolean };
+  recipient: { name: string; email: string; status: string; in_person?: boolean; language?: string };
   document: { title: string; status: string; sender: string; mode: "simple" | "qualified" };
+  brand?: BrandInfo | null;
 }
 interface SField {
   id: string;
@@ -61,11 +63,31 @@ export function Sign() {
   });
   const [info, setInfo] = useState<LoadInfo | null>(null);
   const [finished, setFinished] = useState<null | "signed" | "filled" | "declined" | "delegated">(null);
+  // Idioma: o escolhido pela pessoa nesta página, senão o definido pelo remetente, senão o do navegador.
+  const [chosen, setChosen] = useState<Lang | null>(() => {
+    try {
+      const v = localStorage.getItem("signed:lang");
+      return isLang(v) ? v : null;
+    } catch {
+      return null;
+    }
+  });
+  const lang: Lang = chosen ?? (isLang(start?.recipient.language) ? start!.recipient.language as Lang : browserLang());
+  const tr = useMemo(() => translator(lang), [lang]);
+  function pickLang(l: Lang) {
+    setChosen(l);
+    try {
+      localStorage.setItem("signed:lang", l);
+    } catch {
+      /* ignorar */
+    }
+  }
 
   useEffect(() => {
     signerApi<StartInfo>({ action: "start", token })
       .then(setStart)
-      .catch((e) => setFatal(errorMessage(e)));
+      .catch((e) => setFatal(translator(chosen ?? browserLang()).error(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   async function load(s = session) {
@@ -80,7 +102,7 @@ export function Sign() {
         } catch {
           /* ignorar */
         }
-      } else setFatal(errorMessage(e));
+      } else setFatal(tr.error(e));
     }
   }
 
@@ -90,16 +112,20 @@ export function Sign() {
   }, [session, start]);
 
   return (
-    <div className="min-h-full bg-slate-100">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+    <I18n.Provider value={tr}>
+    <div className="min-h-full bg-slate-100" lang={lang} style={brandStyle(start?.brand)}>
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur" style={start?.brand?.color ? { borderTop: `3px solid ${start.brand.color}` } : undefined}>
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3">
-          <Logo />
-          {start && <p className="min-w-0 truncate text-sm text-slate-600">{start.document.title}</p>}
+          {start ? <BrandMark brand={start.brand} /> : <Logo />}
+          <div className="flex min-w-0 items-center gap-3">
+            {start && <p className="hidden min-w-0 truncate text-sm text-slate-600 sm:block">{start.document.title}</p>}
+            <LangPicker lang={lang} onChange={pickLang} />
+          </div>
         </div>
       </header>
       {hostDoc && (
         <div className="border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-center text-xs text-amber-900">
-          Assinatura presencial: entregue o dispositivo à pessoa que vai assinar.
+          {tr.t("in_person_banner")}
         </div>
       )}
       <main className="mx-auto max-w-5xl px-4 py-6">
@@ -114,17 +140,12 @@ export function Sign() {
         ) : start.document.status !== "in_progress" ? (
           <Centered>
             <Alert kind="info">
-              {{
-                completed: "Este documento já foi assinado por todos. Recebeu (ou vai receber) uma cópia por email.",
-                declined: "Este documento foi rejeitado e já não pode ser assinado.",
-                cancelled: "O remetente cancelou este documento.",
-                expired: "O prazo para assinar este documento terminou.",
-              }[start.document.status] ?? "Este documento não está disponível."}
+              {tr.t(({ completed: "st_completed", declined: "st_declined", cancelled: "st_cancelled", expired: "st_expired" } as const)[start.document.status as "completed"] ?? "st_unavailable")}
             </Alert>
           </Centered>
         ) : !session && start.recipient.in_person ? (
           <Centered>
-            <Alert kind="info">Esta assinatura é presencial. Peça ao colaborador do hotel que a abra no dispositivo dele.</Alert>
+            <Alert kind="info">{tr.t("in_person_need_host")}</Alert>
           </Centered>
         ) : !session ? (
           <Otp token={token} start={start} onSession={(s) => {
@@ -136,12 +157,21 @@ export function Sign() {
             setSession(s);
           }} />
         ) : !info ? (
-          <FullPageSpinner label="A abrir o documento…" />
+          <FullPageSpinner label={tr.t("opening")} />
         ) : (
           <Flow token={token} session={session} info={info} reload={() => load()} onFinished={setFinished} inPerson={!!start.recipient.in_person || !!hostDoc} />
         )}
       </main>
     </div>
+    </I18n.Provider>
+  );
+}
+
+function LangPicker({ lang, onChange }: { lang: Lang; onChange: (l: Lang) => void }) {
+  return (
+    <select className="rounded-md border border-slate-200 bg-white px-1.5 py-1 text-xs text-slate-700" value={lang} onChange={(e) => onChange(e.target.value as Lang)} aria-label="Language / Idioma">
+      {LANGS.map((l) => <option key={l.code} value={l.code}>{l.code.toUpperCase()} · {l.label}</option>)}
+    </select>
   );
 }
 
@@ -150,6 +180,7 @@ function Centered({ children }: { children: React.ReactNode }) {
 }
 
 function Otp({ token, start, onSession }: { token: string; start: StartInfo; onSession: (s: string) => void }) {
+  const { t, tn, error: errText } = useT();
   const [sent, setSent] = useState(false);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -162,7 +193,7 @@ function Otp({ token, start, onSession }: { token: string; start: StartInfo; onS
       await signerApi({ action: "send-otp", token });
       setSent(true);
     } catch (e) {
-      setError(errorMessage(e));
+      setError(errText(e));
       if (e instanceof ApiError && e.code === "rate_limited") setSent(true);
     } finally {
       setBusy(false);
@@ -177,7 +208,7 @@ function Otp({ token, start, onSession }: { token: string; start: StartInfo; onS
       const r = await signerApi<{ session: string }>({ action: "verify-otp", token, code });
       onSession(r.session);
     } catch (err) {
-      setError(errorMessage(err));
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -186,25 +217,25 @@ function Otp({ token, start, onSession }: { token: string; start: StartInfo; onS
   return (
     <div className="mx-auto mt-6 max-w-md">
       <div className="card p-6">
-        <p className="text-sm text-slate-500">{start.document.sender} enviou-lhe</p>
+        <p className="text-sm text-slate-500">{t("sent_you", { sender: start.document.sender })}</p>
         <h1 className="mt-1 text-xl font-semibold tracking-tight">{start.document.title}</h1>
         {start.document.mode === "qualified" && (
           <p className="mt-3 flex items-start gap-2 rounded-lg bg-navy-50 p-3 text-sm text-navy-800">
             <IdIcon className="mt-0.5 h-4 w-4 shrink-0" />
-            Este documento é assinado com Cartão de Cidadão ou Chave Móvel Digital.
+            {t("qualified_note")}
           </p>
         )}
         <div className="mt-5 border-t border-slate-100 pt-5">
           <p className="text-sm">
-            Olá <strong>{start.recipient.name}</strong>. Para proteger o documento, vamos enviar um código de 6 dígitos para <strong>{start.recipient.email}</strong>.
+            {tn("hello", { name: <strong>{start.recipient.name}</strong> })} {tn("code_intro", { email: <strong>{start.recipient.email}</strong> })}
           </p>
           {!sent ? (
             <button className="btn-primary mt-4 w-full py-2.5" onClick={send} disabled={busy}>
-              {busy && <Spinner className="h-4 w-4 text-white" />} Enviar código
+              {busy && <Spinner className="h-4 w-4 text-white" />} {t("send_code")}
             </button>
           ) : (
             <form onSubmit={verify} className="mt-4 space-y-3">
-              <label className="label" htmlFor="code">Código recebido por email</label>
+              <label className="label" htmlFor="code">{t("code_label")}</label>
               <input
                 id="code"
                 className="input text-center text-2xl tracking-[0.5em]"
@@ -216,15 +247,15 @@ function Otp({ token, start, onSession }: { token: string; start: StartInfo; onS
                 autoFocus
               />
               <button className="btn-primary w-full py-2.5" disabled={busy || code.length !== 6}>
-                {busy && <Spinner className="h-4 w-4 text-white" />} Abrir documento
+                {busy && <Spinner className="h-4 w-4 text-white" />} {t("open_doc")}
               </button>
-              <button type="button" className="btn-ghost w-full" onClick={send} disabled={busy}>Reenviar código</button>
+              <button type="button" className="btn-ghost w-full" onClick={send} disabled={busy}>{t("resend_code")}</button>
             </form>
           )}
           {error && <div className="mt-3"><Alert>{error}</Alert></div>}
         </div>
       </div>
-      <p className="mt-4 text-center text-xs text-slate-500">Signed · plataforma de assinatura eletrónica do Grupo Altis Hotels</p>
+      <p className="mt-4 text-center text-xs text-slate-500">{t("footer")}</p>
     </div>
   );
 }
@@ -232,20 +263,21 @@ function Otp({ token, start, onSession }: { token: string; start: StartInfo; onS
 function Flow({ token, session, info, reload, onFinished, inPerson }: { token: string; session: string; info: LoadInfo; reload: () => void; onFinished: (k: "signed" | "filled" | "declined" | "delegated") => void; inPerson: boolean }) {
   const [declining, setDeclining] = useState(false);
   const [delegating, setDelegating] = useState(false);
+  const { t } = useT();
   const canDelegate = !inPerson && ["pending", "notified", "viewed"].includes(info.recipient.status) && info.document.status === "in_progress";
 
   const header = (
     <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
       <div>
-        <p className="text-sm text-slate-500">De {info.document.sender}</p>
+        <p className="text-sm text-slate-500">{t("from_sender", { sender: info.document.sender })}</p>
         <h1 className="text-xl font-semibold tracking-tight">{info.document.title}</h1>
       </div>
       <div className="flex gap-1">
         {canDelegate && (
-          <button className="btn-ghost" onClick={() => setDelegating(true)} title="Passar a assinatura a outra pessoa">Delegar</button>
+          <button className="btn-ghost" onClick={() => setDelegating(true)} title={t("delegate_hint")}>{t("delegate")}</button>
         )}
         {info.step !== "done" && info.step !== "wait" && (
-          <button className="btn-ghost text-red-700" onClick={() => setDeclining(true)}>Rejeitar</button>
+          <button className="btn-ghost text-red-700" onClick={() => setDeclining(true)}>{t("decline")}</button>
         )}
       </div>
     </div>
@@ -262,14 +294,12 @@ function Flow({ token, session, info, reload, onFinished, inPerson }: { token: s
       {info.step === "wait" && (
         <div className="mb-5">
           <Alert kind="info">
-            {info.recipient.status === "filled"
-              ? "Obrigado, os seus dados foram registados. Vai receber um novo email quando chegar a sua vez de assinar com o Cartão de Cidadão."
-              : "Ainda não é a sua vez. Vai receber um email quando puder avançar."}
+            {info.recipient.status === "filled" ? t("wait_filled") : t("wait_turn")}
           </Alert>
         </div>
       )}
       {info.step === "done" && (
-        <div className="mb-5"><Alert kind="success">Já assinou este documento. Obrigado!</Alert></div>
+        <div className="mb-5"><Alert kind="success">{t("already_signed")}</Alert></div>
       )}
       {info.step === "sign_cc" ? (
         <CcWizard token={token} session={session} info={info} onDone={(completed) => (completed ? onFinished("signed") : reload())} onFinished={onFinished} />
@@ -301,6 +331,7 @@ function FillAndSign({ token, session, info, onFinished }: { token: string; sess
   const [error, setError] = useState<string | null>(null);
   const [attention, setAttention] = useState<string | null>(null);
   const savedSig = useRef<Record<string, string>>({});
+  const { t, tn, error: errText } = useT();
 
   const editable = info.fields.filter((f) => f.editable);
   const missing = editable.filter((f) => f.required && !(f.type === "checkbox" ? values[f.id] === "true" : values[f.id]));
@@ -325,7 +356,7 @@ function FillAndSign({ token, session, info, onFinished }: { token: string; sess
       await signerApi({ action: "submit", token, session, values: payload });
       onFinished(info.step === "fill" ? "filled" : "signed");
     } catch (e) {
-      setError(errorMessage(e));
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -338,10 +369,10 @@ function FillAndSign({ token, session, info, onFinished }: { token: string; sess
       {interactive && editable.length > 0 && (
         <div className="mb-4 flex items-center justify-between gap-3 rounded-lg bg-white px-4 py-3 text-sm shadow-sm">
           <span>
-            {missing.length ? <>Faltam <strong>{missing.length}</strong> campo(s) obrigatório(s).</> : <span className="text-emerald-700">Todos os campos obrigatórios estão preenchidos.</span>}
-            {info.step === "fill" && <span className="block text-xs text-slate-500">Nesta fase só preenche os dados. A assinatura com o Cartão de Cidadão vem a seguir.</span>}
+            {missing.length ? tn("missing", { n: <strong>{missing.length}</strong> }) : <span className="text-emerald-700">{t("all_filled")}</span>}
+            {info.step === "fill" && <span className="block text-xs text-slate-500">{t("fill_phase_note")}</span>}
           </span>
-          {missing.length > 0 && <button className="btn-primary" onClick={goNext}>{Object.keys(values).length ? "Seguinte" : "Começar"}</button>}
+          {missing.length > 0 && <button className="btn-primary" onClick={goNext}>{Object.keys(values).length ? t("next") : t("start")}</button>}
         </div>
       )}
 
@@ -387,14 +418,14 @@ function FillAndSign({ token, session, info, onFinished }: { token: string; sess
             {info.step === "sign_simple" ? (
               <label className="flex flex-1 items-start gap-2 text-xs text-slate-600">
                 <input type="checkbox" className="mt-0.5" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
-                Li o documento e concordo em assiná-lo eletronicamente. Aceito que a assinatura eletrónica, a data, a hora e o endereço IP fiquem registados como prova.
+                {t("consent_sign")}
               </label>
             ) : (
-              <p className="flex-1 text-xs text-slate-600">Confirme que os dados estão corretos antes de submeter. Depois de submetidos não podem ser alterados.</p>
+              <p className="flex-1 text-xs text-slate-600">{t("consent_fill")}</p>
             )}
             {error && <div className="sm:max-w-sm"><Alert>{error}</Alert></div>}
             <button className="btn-primary px-6 py-2.5" disabled={busy || missing.length > 0 || (info.step === "sign_simple" && !agree)} onClick={submit}>
-              {busy && <Spinner className="h-4 w-4 text-white" />} {info.step === "sign_simple" ? "Assinar documento" : "Submeter dados"}
+              {busy && <Spinner className="h-4 w-4 text-white" />} {info.step === "sign_simple" ? t("sign_document") : t("submit_data")}
             </button>
           </div>
         </div>
@@ -426,6 +457,7 @@ function SignerField({ f, color, value, interactive, attention, heightPx, recipi
   recipientName: string; fileName?: string; token: string; session: string;
   onChange: (v: string) => void; onFile: (path: string, name: string) => void; onSign: () => void;
 }) {
+  const { t, field } = useT();
   const style: React.CSSProperties = { left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%` };
   const fs = Math.max(9, Math.min(15, heightPx * 0.6));
   const ring = attention ? "ring-4 ring-amber-300" : "";
@@ -436,10 +468,10 @@ function SignerField({ f, color, value, interactive, attention, heightPx, recipi
       ? f.type === "name" ? recipientName : f.type === "signed_date" ? new Date().toISOString().slice(0, 10) : null
       : null;
     return (
-      <div className="absolute flex items-center justify-center overflow-hidden rounded-sm border border-dashed text-[10px]" style={{ ...style, borderColor: color, color, background: `${color}10` }} title={f.readonly ? "Valor fixo definido por quem enviou" : isAutoField(f.type) ? "Preenchido automaticamente" : undefined}>
+      <div className="absolute flex items-center justify-center overflow-hidden rounded-sm border border-dashed text-[10px]" style={{ ...style, borderColor: color, color, background: `${color}10` }} title={f.readonly ? t("fixed_value") : isAutoField(f.type) ? t("auto_value") : undefined}>
         {value || preview ? (
           <FieldValue type={f.type} value={value ?? preview} options={f.options} height={heightPx} />
-        ) : f.type === "signature" ? "Assinatura com Cartão de Cidadão" : f.type === "email" ? "O seu email" : FIELD_LABELS[f.type]}
+        ) : f.type === "signature" ? t("cc_signature") : f.type === "email" ? t("your_email") : field(f.type)}
       </div>
     );
   }
@@ -449,20 +481,20 @@ function SignerField({ f, color, value, interactive, attention, heightPx, recipi
     case "signature":
     case "initials":
       return (
-        <button data-field={f.id} className={`${box} flex items-center justify-center`} style={{ ...style, borderColor: color, background: bg, color }} onClick={onSign} title={FIELD_LABELS[f.type]}>
-          {value ? <img src={value} alt="" className="h-full w-full object-contain" /> : <span className="text-[11px] font-semibold">{f.type === "signature" ? "✍ Assinar" : "Iniciais"}{f.required ? " *" : ""}</span>}
+        <button data-field={f.id} className={`${box} flex items-center justify-center`} style={{ ...style, borderColor: color, background: bg, color }} onClick={onSign} title={field(f.type)}>
+          {value ? <img src={value} alt="" className="h-full w-full object-contain" /> : <span className="text-[11px] font-semibold">{f.type === "signature" ? t("sign_here") : field("initials")}{f.required ? " *" : ""}</span>}
         </button>
       );
     case "checkbox":
       return (
         <label data-field={f.id} className={`${box} flex cursor-pointer items-center justify-center`} style={{ ...style, borderColor: color, background: bg }}>
-          <input type="checkbox" className="h-full w-full cursor-pointer opacity-0" checked={value === "true"} onChange={(e) => onChange(e.target.checked ? "true" : "false")} aria-label={f.label ?? "Caixa de seleção"} />
+          <input type="checkbox" className="h-full w-full cursor-pointer opacity-0" checked={value === "true"} onChange={(e) => onChange(e.target.checked ? "true" : "false")} aria-label={f.label ?? field("checkbox")} />
           {value === "true" && <span className="pointer-events-none absolute font-bold" style={{ fontSize: fs, color: "#0f2445" }}>✓</span>}
         </label>
       );
     case "radio":
       return (
-        <div data-field={f.id} className={`${box} flex flex-col justify-around bg-white/70 px-1`} style={{ ...style, borderColor: color }} role="radiogroup" aria-label={f.label ?? "Opção"}>
+        <div data-field={f.id} className={`${box} flex flex-col justify-around bg-white/70 px-1`} style={{ ...style, borderColor: color }} role="radiogroup" aria-label={f.label ?? field("radio")}>
           {(f.options ?? []).map((o) => (
             <label key={o} className="flex cursor-pointer items-center gap-1 truncate" style={{ fontSize: Math.max(9, Math.min(13, heightPx / (f.options?.length || 1) * 0.6)) }}>
               <input type="radio" name={f.id} checked={value === o} onChange={() => onChange(o)} /> {o}
@@ -472,15 +504,15 @@ function SignerField({ f, color, value, interactive, attention, heightPx, recipi
       );
     case "dropdown":
       return (
-        <select data-field={f.id} className={`${box} bg-white px-1`} style={{ ...style, borderColor: color, fontSize: fs }} value={value ?? ""} onChange={(e) => onChange(e.target.value)} aria-label={f.label ?? "Lista"}>
-          <option value="">{f.label ?? "Escolher…"}</option>
+        <select data-field={f.id} className={`${box} bg-white px-1`} style={{ ...style, borderColor: color, fontSize: fs }} value={value ?? ""} onChange={(e) => onChange(e.target.value)} aria-label={f.label ?? field("dropdown")}>
+          <option value="">{f.label ?? t("choose")}</option>
           {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
       );
     case "attachment":
-      return <AttachmentField f={f} box={box} style={{ ...style, borderColor: color, background: bg, color }} fs={fs} fileName={fileName ?? (value ? "Ficheiro carregado" : undefined)} token={token} session={session} onFile={onFile} />;
+      return <AttachmentField f={f} box={box} style={{ ...style, borderColor: color, background: bg, color }} fs={fs} fileName={fileName ?? (value ? t("file_loaded") : undefined)} token={token} session={session} onFile={onFile} />;
     case "date":
-      return <input data-field={f.id} type="date" className={`${box} bg-white px-1`} style={{ ...style, borderColor: color, fontSize: fs }} value={value ?? ""} onChange={(e) => onChange(e.target.value)} aria-label={f.label ?? "Data"} />;
+      return <input data-field={f.id} type="date" className={`${box} bg-white px-1`} style={{ ...style, borderColor: color, fontSize: fs }} value={value ?? ""} onChange={(e) => onChange(e.target.value)} aria-label={f.label ?? field("date")} />;
     default:
       return (
         <input
@@ -488,10 +520,10 @@ function SignerField({ f, color, value, interactive, attention, heightPx, recipi
           className={`${box} bg-white px-1 outline-none`}
           style={{ ...style, borderColor: color, background: empty ? `${color}12` : "white", fontSize: fs }}
           value={value ?? ""}
-          placeholder={f.label ?? "Texto"}
+          placeholder={f.label ?? field("text")}
           maxLength={500}
           onChange={(e) => onChange(e.target.value)}
-          aria-label={f.label ?? "Texto"}
+          aria-label={f.label ?? field("text")}
         />
       );
   }
@@ -502,11 +534,12 @@ function AttachmentField({ f, box, style, fs, fileName, token, session, onFile }
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t, error: errText } = useT();
   async function pick(file: File | undefined) {
     if (!file) return;
     setError(null);
-    if (file.size > 10 * 1024 * 1024) return setError("O ficheiro tem mais de 10 MB.");
-    if (!/\.(pdf|jpe?g|png)$/i.test(file.name)) return setError("Escolha um PDF ou uma imagem (JPG ou PNG).");
+    if (file.size > 10 * 1024 * 1024) return setError(t("file_too_big"));
+    if (!/\.(pdf|jpe?g|png)$/i.test(file.name)) return setError(t("file_type"));
     setBusy(true);
     try {
       const u = await signerApi<{ path: string; uploadToken: string }>({ action: "attachment-upload-url", token, session, field_id: f.id, file_name: file.name });
@@ -514,7 +547,7 @@ function AttachmentField({ f, box, style, fs, fileName, token, session, onFile }
       if (up.error) throw up.error;
       onFile(u.path, file.name);
     } catch (e) {
-      setError(errorMessage(e));
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -523,7 +556,7 @@ function AttachmentField({ f, box, style, fs, fileName, token, session, onFile }
     <label data-field={f.id} className={`${box} flex cursor-pointer items-center justify-center gap-1 px-1`} style={style} title={error ?? f.label ?? "Anexo"}>
       <input type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" className="sr-only" onChange={(e) => pick(e.target.files?.[0])} disabled={busy} />
       <span className="truncate font-semibold" style={{ fontSize: Math.min(fs, 12), color: error ? "#b91c1c" : undefined }}>
-        {busy ? "A carregar…" : error ? `⚠ ${error}` : fileName ? `📎 ${fileName}` : `📎 ${f.label || "Anexar ficheiro"}${f.required ? " *" : ""}`}
+        {busy ? t("uploading") : error ? `⚠ ${error}` : fileName ? `📎 ${fileName}` : `📎 ${f.label || t("attach_file")}${f.required ? " *" : ""}`}
       </span>
     </label>
   );
@@ -535,8 +568,9 @@ function DelegateModal({ open, onClose, token, session, mode, onDone }: { open: 
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t, error: errText } = useT();
   return (
-    <Modal open={open} onClose={onClose} title="Delegar a assinatura">
+    <Modal open={open} onClose={onClose} title={t("delegate_title")}>
       <form
         className="space-y-3"
         onSubmit={async (e) => {
@@ -547,32 +581,32 @@ function DelegateModal({ open, onClose, token, session, mode, onDone }: { open: 
             await signerApi({ action: "delegate", token, session, name, email, reason });
             onDone();
           } catch (err) {
-            setError(errorMessage(err));
+            setError(errText(err));
           } finally {
             setBusy(false);
           }
         }}
       >
         <p className="text-sm text-slate-600">
-          A outra pessoa recebe um convite por email e passa a assinar no seu lugar. O seu link deixa de funcionar e quem enviou o documento é avisado.
-          {mode === "qualified" && " Como é uma assinatura com Cartão de Cidadão, indique o nome tal como está no cartão dessa pessoa."}
+          {t("delegate_intro")}
+          {mode === "qualified" && ` ${t("delegate_intro_cc")}`}
         </p>
         <div>
-          <label className="label" htmlFor="dname">Nome completo</label>
+          <label className="label" htmlFor="dname">{t("full_name")}</label>
           <input id="dname" className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={200} required />
         </div>
         <div>
-          <label className="label" htmlFor="demail">Email</label>
+          <label className="label" htmlFor="demail">{t("email")}</label>
           <input id="demail" type="email" className="input" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </div>
         <div>
-          <label className="label" htmlFor="dreason">Motivo (opcional)</label>
-          <textarea id="dreason" className="input min-h-20" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} placeholder="Ex.: estou de férias; quem assina é o subdiretor." />
+          <label className="label" htmlFor="dreason">{t("reason_optional")}</label>
+          <textarea id="dreason" className="input min-h-20" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} placeholder={t("delegate_reason_ph")} />
         </div>
         {error && <Alert>{error}</Alert>}
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn-secondary" onClick={onClose}>Voltar</button>
-          <button className="btn-primary" disabled={busy || !name.trim() || !email.trim()}>{busy && <Spinner className="h-4 w-4 text-white" />} Delegar</button>
+          <button type="button" className="btn-secondary" onClick={onClose}>{t("back")}</button>
+          <button className="btn-primary" disabled={busy || !name.trim() || !email.trim()}>{busy && <Spinner className="h-4 w-4 text-white" />} {t("delegate")}</button>
         </div>
       </form>
     </Modal>
@@ -585,6 +619,7 @@ function CcWizard({ token, session, info, onDone, onFinished }: { token: string;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  const { t, tn, error: errText } = useT();
 
   async function download() {
     setError(null);
@@ -593,7 +628,7 @@ function CcWizard({ token, session, info, onDone, onFinished }: { token: string;
       window.location.href = r.url;
       setDownloaded(true);
     } catch (e) {
-      setError(errorMessage(e));
+      setError(errText(e));
     }
   }
 
@@ -601,17 +636,17 @@ function CcWizard({ token, session, info, onDone, onFinished }: { token: string;
     if (!file) return;
     setError(null);
     try {
-      if (file.size > 30 * 1024 * 1024) throw new Error("O ficheiro é demasiado grande.");
-      setBusy("A carregar…");
+      if (file.size > 30 * 1024 * 1024) throw new Error(t("cc_too_big"));
+      setBusy(t("uploading"));
       const u = await signerApi<{ path: string; uploadToken: string }>({ action: "cc-upload-url", token, session });
       const up = await anon.storage.from(BUCKET).uploadToSignedUrl(u.path, u.uploadToken, file, { contentType: "application/pdf" });
       if (up.error) throw up.error;
-      setBusy("A validar a assinatura…");
+      setBusy(t("cc_validating"));
       const r = await signerApi<{ ok: boolean; signer: string; completed: boolean }>({ action: "cc-submit", token, session, path: u.path });
       setOk(r.signer);
       setTimeout(() => (r.completed ? onFinished("signed") : onDone(false)), 1800);
     } catch (e) {
-      setError(errorMessage(e));
+      setError(errText(e));
       setFile(null);
     } finally {
       setBusy(null);
@@ -633,34 +668,34 @@ function CcWizard({ token, session, info, onDone, onFinished }: { token: string;
   return (
     <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
       <div className="card h-fit p-5 lg:sticky lg:top-20">
-        <h2 className="flex items-center gap-2 text-lg font-semibold"><IdIcon className="h-5 w-5" /> Assinar com Cartão de Cidadão</h2>
+        <h2 className="flex items-center gap-2 text-lg font-semibold"><IdIcon className="h-5 w-5" /> {t("cc_title")}</h2>
         <ol className="mt-5">
-          <Step n={1} title="Prepare o computador">
-            Precisa da app gratuita <a className="text-navy-600 underline" href="https://www.autenticacao.gov.pt" target="_blank" rel="noreferrer">Autenticação.gov</a> e de:
+          <Step n={1} title={t("cc_s1")}>
+            {tn("cc_s1_body", { app: <a className="text-navy-600 underline" href="https://www.autenticacao.gov.pt" target="_blank" rel="noreferrer">Autenticação.gov</a> })}
             <ul className="mt-1 list-disc pl-5">
-              <li>Cartão de Cidadão + leitor de cartões + PIN de assinatura; ou</li>
-              <li>Chave Móvel Digital ativa com assinatura (telemóvel + PIN).</li>
+              <li>{t("cc_s1_card")}</li>
+              <li>{t("cc_s1_cmd")}</li>
             </ul>
           </Step>
-          <Step n={2} title="Descarregue o documento" done={downloaded}>
-            <button className="btn-secondary mt-2" onClick={download}><DownloadIcon className="h-4 w-4" /> Descarregar PDF para assinar</button>
-            <p className="mt-2 text-xs">Não abra nem guarde o PDF noutro programa antes de assinar.</p>
+          <Step n={2} title={t("cc_s2")} done={downloaded}>
+            <button className="btn-secondary mt-2" onClick={download}><DownloadIcon className="h-4 w-4" /> {t("cc_s2_btn")}</button>
+            <p className="mt-2 text-xs">{t("cc_s2_note")}</p>
           </Step>
-          <Step n={3} title="Assine na app Autenticação.gov">
-            Abra a app, escolha <strong>Assinatura</strong>, adicione o PDF descarregado e coloque a assinatura visível no retângulo azul «Assinatura qualificada». Assine com o Cartão de Cidadão ou a Chave Móvel Digital e guarde o ficheiro assinado.
+          <Step n={3} title={t("cc_s3")}>
+            {t("cc_s3_body")}
           </Step>
-          <Step n={4} title="Carregue o PDF assinado" done={!!ok}>
+          <Step n={4} title={t("cc_s4")} done={!!ok}>
             {ok ? (
-              <Alert kind="success">Assinatura válida de <strong>{ok}</strong>. Obrigado!</Alert>
+              <Alert kind="success">{tn("cc_valid", { name: <strong>{ok}</strong> })}</Alert>
             ) : (
               <>
                 <label className="mt-2 flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 px-3 py-5 text-center hover:bg-slate-100">
                   <UploadIcon className="h-6 w-6 text-slate-400" />
-                  <span className="mt-1 text-sm">{file ? file.name : "Escolher o PDF assinado"}</span>
+                  <span className="mt-1 text-sm">{file ? file.name : t("cc_choose")}</span>
                   <input type="file" accept="application/pdf,.pdf" className="sr-only" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setError(null); }} />
                 </label>
                 <button className="btn-primary mt-3 w-full" disabled={!file || !!busy} onClick={upload}>
-                  {busy ? <><Spinner className="h-4 w-4 text-white" /> {busy}</> : "Enviar documento assinado"}
+                  {busy ? <><Spinner className="h-4 w-4 text-white" /> {busy}</> : t("cc_send")}
                 </button>
               </>
             )}
@@ -679,14 +714,15 @@ function DeclineModal({ open, onClose, token, session, onDone }: { open: boolean
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t, error: errText } = useT();
   return (
-    <Modal open={open} onClose={onClose} title="Rejeitar documento">
-      <p className="text-sm text-slate-600">O remetente será avisado e o documento deixa de poder ser assinado por todos.</p>
-      <label className="label mt-4" htmlFor="reason">Motivo (opcional)</label>
+    <Modal open={open} onClose={onClose} title={t("decline_title")}>
+      <p className="text-sm text-slate-600">{t("decline_intro")}</p>
+      <label className="label mt-4" htmlFor="reason">{t("reason_optional")}</label>
       <textarea id="reason" className="input min-h-24" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} />
       {error && <div className="mt-3"><Alert>{error}</Alert></div>}
       <div className="mt-5 flex justify-end gap-2">
-        <button className="btn-secondary" onClick={onClose}>Voltar</button>
+        <button className="btn-secondary" onClick={onClose}>{t("back")}</button>
         <button
           className="btn bg-red-700 text-white hover:bg-red-800"
           disabled={busy}
@@ -696,13 +732,13 @@ function DeclineModal({ open, onClose, token, session, onDone }: { open: boolean
               await signerApi({ action: "decline", token, session, reason });
               onDone();
             } catch (e) {
-              setError(errorMessage(e));
+              setError(errText(e));
             } finally {
               setBusy(false);
             }
           }}
         >
-          Rejeitar
+          {t("decline")}
         </button>
       </div>
     </Modal>
@@ -710,27 +746,28 @@ function DeclineModal({ open, onClose, token, session, onDone }: { open: boolean
 }
 
 function Done({ kind, title, hostDoc }: { kind: "signed" | "filled" | "declined" | "delegated"; title: string; hostDoc?: string | null }) {
+  const { t } = useT();
   return (
     <div className="mx-auto mt-10 max-w-md text-center">
       <div className={`mx-auto flex h-14 w-14 items-center justify-center rounded-full ${kind === "declined" ? "bg-slate-200 text-slate-600" : "bg-emerald-100 text-emerald-700"}`}>
         {kind === "declined" ? "✕" : kind === "delegated" ? "→" : <CheckIcon className="h-7 w-7" />}
       </div>
       <h1 className="mt-4 text-xl font-semibold">
-        {kind === "signed" ? "Documento assinado" : kind === "filled" ? "Dados submetidos" : kind === "delegated" ? "Assinatura delegada" : "Documento rejeitado"}
+        {t(kind === "signed" ? "done_signed" : kind === "filled" ? "done_filled" : kind === "delegated" ? "done_delegated" : "done_declined")}
       </h1>
       <p className="muted mt-2">
-        {kind === "signed" && `Obrigado. Quando todos assinarem «${title}», recebe uma cópia final por email.`}
-        {kind === "filled" && "Obrigado. Vai receber um email quando chegar a sua vez de assinar com o Cartão de Cidadão."}
-        {kind === "declined" && "O remetente foi avisado."}
-        {kind === "delegated" && "A outra pessoa recebeu o convite por email e o remetente foi avisado."}
+        {kind === "signed" && t("done_signed_body", { title })}
+        {kind === "filled" && t("done_filled_body")}
+        {kind === "declined" && t("done_declined_body")}
+        {kind === "delegated" && t("done_delegated_body")}
       </p>
       {hostDoc ? (
         <div className="mt-6">
-          <p className="text-sm text-slate-600">Obrigado. Pode devolver o dispositivo.</p>
+          <p className="text-sm text-slate-600">{t("in_person_return")}</p>
           <Link to={`/documentos/${hostDoc}`} className="btn-secondary mt-3">Voltar ao documento (colaborador)</Link>
         </div>
       ) : (
-        <p className="mt-6 text-xs text-slate-400">Pode fechar esta página.</p>
+        <p className="mt-6 text-xs text-slate-400">{t("close_page")}</p>
       )}
     </div>
   );
