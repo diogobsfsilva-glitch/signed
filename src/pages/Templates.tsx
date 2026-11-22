@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthProvider";
 import { instantiate } from "../lib/templates";
+import { CreateLinkModal, linkProblem, QrModal, type LinkRow } from "./PublicLinks";
 import { Alert, EmptyState, FullPageSpinner, IdIcon, ModeBadge, Modal, PlusIcon, Spinner, toast } from "../components/ui";
 import { errorMessage, relative } from "../lib/format";
 
@@ -34,6 +35,8 @@ export function Templates() {
   const [rows, setRows] = useState<TemplateRow[] | null>(null);
   const [q, setQ] = useState("");
   const [using, setUsing] = useState<TemplateRow | null>(null);
+  const [linkFor, setLinkFor] = useState<string | null>(null);
+  const [qr, setQr] = useState<LinkRow | null>(null);
   const nav = useNavigate();
 
   useEffect(() => {
@@ -117,6 +120,11 @@ export function Templates() {
                     >
                       Em massa
                     </button>
+                    {!linkProblem(r) && (
+                      <button className="btn-secondary" onClick={() => setLinkFor(r.id)} title="Link ou código QR para qualquer pessoa preencher e assinar">
+                        Link
+                      </button>
+                    )}
                     {canEdit(r) && (
                       <button className="btn-secondary" onClick={() => nav(`/documentos/${r.id}/editar`)}>
                         Editar
@@ -131,6 +139,8 @@ export function Templates() {
       </div>
 
       <UseTemplateModal template={using} onClose={() => setUsing(null)} />
+      <CreateLinkModal open={!!linkFor} templateId={linkFor ?? undefined} onClose={() => setLinkFor(null)} onCreated={(l) => { setLinkFor(null); setQr(l); }} />
+      <QrModal link={qr} onClose={() => setQr(null)} />
     </div>
   );
 }

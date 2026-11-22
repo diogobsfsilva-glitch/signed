@@ -435,3 +435,6 @@ verify_jwt = false
 
 [functions.reminders]
 verify_jwt = false
+
+[functions.public-form]
+verify_jwt = false

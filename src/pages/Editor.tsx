@@ -11,7 +11,7 @@ import { DEFAULT_SIZE, fieldIcon } from "../components/FieldBox";
 import { Alert, ArrowDown, ArrowUp, FullPageSpinner, IdIcon, Modal, PlusIcon, Spinner, TrashIcon, toast } from "../components/ui";
 import { errorMessage, RECIPIENT_COLORS } from "../lib/format";
 
-type R = Pick<RecipientRow, "id" | "name" | "email" | "role" | "signing_order" | "civil_id" | "color" | "status">;
+type R = Pick<RecipientRow, "id" | "name" | "email" | "role" | "signing_order" | "civil_id" | "color" | "status"> & { in_person: boolean };
 type F = Pick<FieldRow, "id" | "recipient_id" | "type" | "page" | "x" | "y" | "w" | "h" | "required" | "label" | "options" | "group_name" | "value"> & { readonly: boolean };
 type Tab = "recipients" | "fields" | "settings";
 
@@ -50,7 +50,7 @@ export function Editor() {
       if (!d) return setNotFound(true);
       if (d.status !== "draft") return nav(`/documentos/${d.id}`, { replace: true });
       const [{ data: r }, { data: f }, { data: url }] = await Promise.all([
-        supabase.from("recipients").select("id, name, email, role, signing_order, civil_id, color, status").eq("document_id", d.id).order("signing_order").order("created_at"),
+        supabase.from("recipients").select("id, name, email, role, signing_order, civil_id, color, status, in_person").eq("document_id", d.id).order("signing_order").order("created_at"),
         supabase.from("fields").select("id, recipient_id, type, page, x, y, w, h, required, label, options, group_name, value, readonly").eq("document_id", d.id),
         supabase.storage.from(BUCKET).createSignedUrl(d.original_path, 3600),
       ]);
@@ -76,7 +76,7 @@ export function Editor() {
   }
 
   // ------------------------------------------------------------------ destinatários
-  async function addRecipient(r: { name: string; email: string; role: "signer" | "cc"; civil_id: string | null }) {
+  async function addRecipient(r: { name: string; email: string; role: "signer" | "cc"; civil_id: string | null; in_person: boolean }) {
     const used = new Set(recipients.map((x) => x.color));
     const color = RECIPIENT_COLORS.find((c) => !used.has(c)) ?? RECIPIENT_COLORS[recipients.length % RECIPIENT_COLORS.length];
     const row: R = {
@@ -85,6 +85,7 @@ export function Editor() {
       email: r.email.trim().toLowerCase(),
       role: r.role,
       civil_id: r.civil_id,
+      in_person: r.role === "signer" && r.in_person,
       signing_order: Math.max(0, ...recipients.map((x) => x.signing_order)) + 1,
       color,
       status: "pending",
@@ -433,7 +434,7 @@ function RecipientsPanel({
 }: {
   doc: DocumentRow;
   recipients: R[];
-  onAdd: (r: { name: string; email: string; role: "signer" | "cc"; civil_id: string | null }) => Promise<void>;
+  onAdd: (r: { name: string; email: string; role: "signer" | "cc"; civil_id: string | null; in_person: boolean }) => Promise<void>;
   onUpdate: (id: string, p: Partial<R>) => void;
   onRemove: (id: string) => void;
   onMove: (id: string, dir: -1 | 1) => void;
@@ -444,6 +445,7 @@ function RecipientsPanel({
   const tpl = doc.is_template;
   const [role, setRole] = useState<"signer" | "cc">("signer");
   const [civil, setCivil] = useState("");
+  const [inPerson, setInPerson] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const ordered = [...recipients].sort((a, b) => a.signing_order - b.signing_order);
   const q = doc.signature_mode === "qualified";
@@ -459,12 +461,17 @@ function RecipientsPanel({
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{r.name}</p>
-                <p className="truncate text-xs text-slate-500">{r.email || (tpl ? "Email indicado ao usar o modelo" : "Sem email")}</p>
+                <p className="truncate text-xs text-slate-500">{r.email || (r.in_person ? "Sem email" : tpl ? "Email indicado ao usar o modelo" : "Sem email")}</p>
                 <div className="mt-1.5 flex flex-wrap items-center gap-2">
                   <select className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs" value={r.role} onChange={(e) => onUpdate(r.id, { role: e.target.value as "signer" | "cc" })} aria-label="Papel">
                     <option value="signer">Assina</option>
                     <option value="cc">Recebe cópia</option>
                   </select>
+                  {!q && r.role === "signer" && (
+                    <label className="flex items-center gap-1 text-xs text-slate-600" title="Assina no seu dispositivo (tablet na receção), sem email nem código">
+                      <input type="checkbox" checked={r.in_person} onChange={(e) => onUpdate(r.id, { in_person: e.target.checked })} /> Presencial
+                    </label>
+                  )}
                   {q && r.role === "signer" && (
                     <input
                       className="w-32 rounded border border-slate-200 px-1.5 py-0.5 text-xs"
@@ -499,16 +506,23 @@ function RecipientsPanel({
           if (email.trim() && recipients.some((r) => r.email === email.trim().toLowerCase())) return setErr("Esse email já está na lista.");
           const c = civil.replace(/\D/g, "");
           if (c && (c.length < 6 || c.length > 9)) return setErr("O nº de identificação civil tem entre 6 e 9 dígitos.");
-          await onAdd({ name, email, role, civil_id: c || null });
+          await onAdd({ name, email, role, civil_id: c || null, in_person: inPerson && !q });
           setName("");
           setEmail("");
           setCivil("");
+          setInPerson(false);
         }}
       >
         <p className="text-sm font-medium">{tpl ? "Adicionar papel" : "Adicionar destinatário"}</p>
         {tpl && <p className="text-xs text-slate-500">Indique o papel (ex.: Colaborador, Diretor do hotel). O nome e o email pedem-se ao usar o modelo; preencha o email só se for sempre a mesma pessoa.</p>}
         <input className="input" placeholder={tpl ? "Papel (ex.: Colaborador)" : "Nome completo"} value={name} onChange={(e) => setName(e.target.value)} required maxLength={200} />
-        <input className="input" type="email" placeholder={tpl ? "Email (opcional)" : "email@exemplo.pt"} value={email} onChange={(e) => setEmail(e.target.value)} required={!tpl} />
+        <input className="input" type="email" placeholder={tpl || inPerson ? "Email (opcional)" : "email@exemplo.pt"} value={email} onChange={(e) => setEmail(e.target.value)} required={!tpl && !inPerson} />
+        {!q && role === "signer" && (
+          <label className="flex items-start gap-2 text-xs text-slate-600">
+            <input type="checkbox" className="mt-0.5" checked={inPerson} onChange={(e) => setInPerson(e.target.checked)} />
+            <span><strong>Presencial:</strong> assina no seu dispositivo (ex.: tablet na receção), sem email nem código. O email só serve para receber a cópia final.</span>
+          </label>
+        )}
         <div className="flex gap-2">
           <select className="input" value={role} onChange={(e) => setRole(e.target.value as "signer" | "cc")} aria-label="Papel">
             <option value="signer">Assina</option>

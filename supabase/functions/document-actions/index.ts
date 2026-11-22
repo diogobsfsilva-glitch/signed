@@ -2,13 +2,11 @@
 
 import { clientIp, handler, HttpError, json, readJson, userAgent } from "../_shared/http.ts";
 import { canManage, requireUser } from "../_shared/auth.ts";
-import { advance, audit, download, loadBundle, REASSIGNABLE, reassignRecipient, remind, serviceClient, signerToken, tokenHash } from "../_shared/engine.ts";
-import { currentRecipients, validateForSend } from "../_shared/workflow.ts";
-import { assertValidPdf } from "../_shared/pdf.ts";
-import { sha256Hex } from "../_shared/util.ts";
+import { advance, audit, createSignerSession, loadBundle, REASSIGNABLE, reassignRecipient, remind, sendDocument, serviceClient, signerToken } from "../_shared/engine.ts";
+import { currentRecipients } from "../_shared/workflow.ts";
 
 interface Body {
-  action: "send" | "cancel" | "remind" | "correct";
+  action: "send" | "cancel" | "remind" | "correct" | "in_person";
   document_id: string;
   recipient_id?: string;
   /** correct: destinatários a corrigir */
@@ -34,52 +32,7 @@ Deno.serve(handler(async (req) => {
     case "send": {
       if (b.doc.owner_id !== user.id) throw new HttpError(403, "Só quem criou o documento o pode enviar.");
       if (b.doc.status !== "draft") throw new HttpError(409, "O documento já foi enviado.");
-      const issues = validateForSend(b.doc, b.recipients, b.fields);
-      if (issues.length) throw new HttpError(422, issues.map((i) => i.message).join("\n"), "validation");
-      if (b.doc.expires_at && new Date(b.doc.expires_at) < new Date(Date.now() + 3600_000)) {
-        throw new HttpError(422, "O prazo tem de ser pelo menos daqui a uma hora.", "validation");
-      }
-      if (b.doc.original_path !== `${b.doc.workspace_id}/${b.doc.id}/original.pdf`) {
-        throw new HttpError(422, "Ficheiro do documento inválido.", "validation");
-      }
-      const pdf = await download(sb, b.doc.original_path!);
-      const pages = await assertValidPdf(pdf).catch((e) => {
-        throw new HttpError(422, (e as Error).message, "invalid_pdf");
-      });
-      const bad = b.fields.find((f) => f.page > pages);
-      if (bad) throw new HttpError(422, "Há campos em páginas que não existem no PDF.", "validation");
-      const hash = await sha256Hex(pdf);
-
-      for (const r of b.recipients) {
-        await sb
-          .from("recipients")
-          .update({
-            token_hash: r.role === "signer" ? await tokenHash(await signerToken(r)) : null,
-            status: "pending",
-            notified_at: null,
-            notified_phase: null,
-          })
-          .eq("id", r.id);
-      }
-      const { data: updated } = await sb
-        .from("documents")
-        .update({ status: "in_progress", sent_at: new Date().toISOString(), phase: "fill", original_sha256: hash, page_count: pages })
-        .eq("id", b.doc.id)
-        .eq("status", "draft")
-        .select("id");
-      if (!updated?.length) throw new HttpError(409, "O documento já foi enviado.");
-      await audit(sb, b.doc.id, "document.sent", {
-        actorUserId: user.id,
-        ip,
-        ua,
-        details: {
-          original_sha256: hash,
-          mode: b.doc.signature_mode,
-          sequential: b.doc.sequential,
-          recipients: b.recipients.map((r) => ({ name: r.name, email: r.email, role: r.role, order: r.signing_order })),
-        },
-      });
-      await advance(sb, b.doc.id);
+      await sendDocument(sb, b, { actorUserId: user.id, ip, ua });
       return json({ ok: true });
     }
 
@@ -96,7 +49,7 @@ Deno.serve(handler(async (req) => {
       if (!(await canManage(sb, user, b.doc))) throw new HttpError(403, "Sem permissão.");
       if (b.doc.status !== "in_progress") throw new HttpError(409, "O documento não está em curso.");
       const current = currentRecipients(b.doc, b.recipients, b.fields).map((r) => r.id);
-      const targets = b.recipients.filter((r) => current.includes(r.id) && (!body.recipient_id || r.id === body.recipient_id));
+      const targets = b.recipients.filter((r) => current.includes(r.id) && !r.in_person && r.email && (!body.recipient_id || r.id === body.recipient_id));
       if (!targets.length) throw new HttpError(409, "Não há ninguém a quem lembrar neste momento.");
       for (const r of targets) {
         if (r.reminded_at && Date.now() - new Date(r.reminded_at).getTime() < 10 * 60_000) {
@@ -105,6 +58,23 @@ Deno.serve(handler(async (req) => {
       }
       for (const r of targets) await remind(sb, b, r);
       return json({ ok: true, reminded: targets.length });
+    }
+
+    case "in_person": {
+      // O colaborador abre a assinatura de um destinatário presencial no seu dispositivo.
+      if (!(await canManage(sb, user, b.doc))) throw new HttpError(403, "Sem permissão.");
+      if (b.doc.status !== "in_progress") throw new HttpError(409, "O documento não está em curso.");
+      const r = b.recipients.find((x) => x.id === body.recipient_id);
+      if (!r || !r.in_person) throw new HttpError(404, "Destinatário presencial não encontrado.");
+      if (!currentRecipients(b.doc, b.recipients, b.fields).some((x) => x.id === r.id)) {
+        throw new HttpError(409, "Ainda não é a vez desta pessoa assinar.");
+      }
+      const session = await createSignerSession(sb, r.id, 2 * 3600_000);
+      if (!r.viewed_at) {
+        await sb.from("recipients").update({ viewed_at: new Date().toISOString(), status: ["pending", "notified"].includes(r.status) ? "viewed" : r.status }).eq("id", r.id);
+      }
+      await audit(sb, b.doc.id, "recipient.in_person_started", { recipientId: r.id, actorUserId: user.id, ip, ua, details: { host: user.full_name || user.email } });
+      return json({ token: await signerToken(r), session });
     }
 
     case "correct": {

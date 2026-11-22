@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { createClient } from "@supabase/supabase-js";
 import { ApiError, signerApi } from "../lib/api";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, BUCKET } from "../lib/supabase";
@@ -15,7 +15,7 @@ import { errorMessage } from "../lib/format";
 const anon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false, storageKey: "signed-signer" } });
 
 interface StartInfo {
-  recipient: { name: string; email: string; status: string };
+  recipient: { name: string; email: string; status: string; in_person?: boolean };
   document: { title: string; status: string; sender: string; mode: "simple" | "qualified" };
 }
 interface SField {
@@ -46,6 +46,9 @@ interface LoadInfo {
 
 export function Sign() {
   const { token = "" } = useParams();
+  const [params] = useSearchParams();
+  // Assinatura presencial: o colaborador abriu esta página no seu dispositivo (id do documento).
+  const hostDoc = params.get("presencial");
   const key = `signed:s:${token.slice(0, 16)}`;
   const [start, setStart] = useState<StartInfo | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
@@ -94,6 +97,11 @@ export function Sign() {
           {start && <p className="min-w-0 truncate text-sm text-slate-600">{start.document.title}</p>}
         </div>
       </header>
+      {hostDoc && (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-center text-xs text-amber-900">
+          Assinatura presencial: entregue o dispositivo à pessoa que vai assinar.
+        </div>
+      )}
       <main className="mx-auto max-w-5xl px-4 py-6">
         {fatal ? (
           <Centered>
@@ -102,7 +110,7 @@ export function Sign() {
         ) : !start ? (
           <FullPageSpinner />
         ) : finished ? (
-          <Done kind={finished} title={start.document.title} />
+          <Done kind={finished} title={start.document.title} hostDoc={hostDoc} />
         ) : start.document.status !== "in_progress" ? (
           <Centered>
             <Alert kind="info">
@@ -113,6 +121,10 @@ export function Sign() {
                 expired: "O prazo para assinar este documento terminou.",
               }[start.document.status] ?? "Este documento não está disponível."}
             </Alert>
+          </Centered>
+        ) : !session && start.recipient.in_person ? (
+          <Centered>
+            <Alert kind="info">Esta assinatura é presencial. Peça ao colaborador do hotel que a abra no dispositivo dele.</Alert>
           </Centered>
         ) : !session ? (
           <Otp token={token} start={start} onSession={(s) => {
@@ -126,7 +138,7 @@ export function Sign() {
         ) : !info ? (
           <FullPageSpinner label="A abrir o documento…" />
         ) : (
-          <Flow token={token} session={session} info={info} reload={() => load()} onFinished={setFinished} />
+          <Flow token={token} session={session} info={info} reload={() => load()} onFinished={setFinished} inPerson={!!start.recipient.in_person || !!hostDoc} />
         )}
       </main>
     </div>
@@ -217,10 +229,10 @@ function Otp({ token, start, onSession }: { token: string; start: StartInfo; onS
   );
 }
 
-function Flow({ token, session, info, reload, onFinished }: { token: string; session: string; info: LoadInfo; reload: () => void; onFinished: (k: "signed" | "filled" | "declined" | "delegated") => void }) {
+function Flow({ token, session, info, reload, onFinished, inPerson }: { token: string; session: string; info: LoadInfo; reload: () => void; onFinished: (k: "signed" | "filled" | "declined" | "delegated") => void; inPerson: boolean }) {
   const [declining, setDeclining] = useState(false);
   const [delegating, setDelegating] = useState(false);
-  const canDelegate = ["pending", "notified", "viewed"].includes(info.recipient.status) && info.document.status === "in_progress";
+  const canDelegate = !inPerson && ["pending", "notified", "viewed"].includes(info.recipient.status) && info.document.status === "in_progress";
 
   const header = (
     <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
@@ -697,7 +709,7 @@ function DeclineModal({ open, onClose, token, session, onDone }: { open: boolean
   );
 }
 
-function Done({ kind, title }: { kind: "signed" | "filled" | "declined" | "delegated"; title: string }) {
+function Done({ kind, title, hostDoc }: { kind: "signed" | "filled" | "declined" | "delegated"; title: string; hostDoc?: string | null }) {
   return (
     <div className="mx-auto mt-10 max-w-md text-center">
       <div className={`mx-auto flex h-14 w-14 items-center justify-center rounded-full ${kind === "declined" ? "bg-slate-200 text-slate-600" : "bg-emerald-100 text-emerald-700"}`}>
@@ -712,7 +724,14 @@ function Done({ kind, title }: { kind: "signed" | "filled" | "declined" | "deleg
         {kind === "declined" && "O remetente foi avisado."}
         {kind === "delegated" && "A outra pessoa recebeu o convite por email e o remetente foi avisado."}
       </p>
-      <p className="mt-6 text-xs text-slate-400">Pode fechar esta página.</p>
+      {hostDoc ? (
+        <div className="mt-6">
+          <p className="text-sm text-slate-600">Obrigado. Pode devolver o dispositivo.</p>
+          <Link to={`/documentos/${hostDoc}`} className="btn-secondary mt-3">Voltar ao documento (colaborador)</Link>
+        </div>
+      ) : (
+        <p className="mt-6 text-xs text-slate-400">Pode fechar esta página.</p>
+      )}
     </div>
   );
 }

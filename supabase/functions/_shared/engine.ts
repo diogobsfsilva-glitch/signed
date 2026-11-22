@@ -4,14 +4,14 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { DocumentRow, FieldRow, RecipientRow } from "./types.ts";
 import { autoFieldValue, isAutoField, parseAttachment } from "./types.ts";
-import { allSigned, currentRecipients, fillPhaseDone } from "./workflow.ts";
-import { flattenFields } from "./pdf.ts";
+import { allSigned, currentRecipients, fillPhaseDone, validateForSend } from "./workflow.ts";
+import { assertValidPdf, flattenFields } from "./pdf.ts";
 import { loadSealKey, type SealKey, sealPdf } from "./pades-sign.ts";
 import { buildAuditCertificate } from "./audit-cert.ts";
 import { completedEmail, deliver, inviteEmail } from "./email.ts";
 import { m365Config, uploadToSharePoint } from "./m365.ts";
-import { sha256Hex, toBase64 } from "./util.ts";
-import { env } from "./http.ts";
+import { randomToken, sha256Hex, toBase64 } from "./util.ts";
+import { env, HttpError } from "./http.ts";
 
 export const BUCKET = "documents";
 
@@ -61,6 +61,71 @@ export function tokenHash(token: string): Promise<string> {
 
 export async function signerUrl(r: { id: string; token_version?: number | null }): Promise<string> {
   return `${appUrl()}/s/${await signerToken(r)}`;
+}
+
+/** Cria uma sessão de signatário (depois do código por email, presencial ou link público). */
+export async function createSignerSession(sb: SupabaseClient, recipientId: string, ttlMs: number): Promise<string> {
+  const session = randomToken();
+  const { error } = await sb.from("signer_sessions").insert({
+    recipient_id: recipientId,
+    token_hash: await sha256Hex(`session:${session}`),
+    expires_at: new Date(Date.now() + ttlMs).toISOString(),
+  });
+  if (error) throw new Error(error.message);
+  return session;
+}
+
+/** Valida e envia um rascunho (colaborador ou link público). */
+export async function sendDocument(
+  sb: SupabaseClient,
+  b: Bundle,
+  o: { actorUserId?: string | null; ip?: string | null; ua?: string | null },
+): Promise<void> {
+  if (b.doc.status !== "draft") throw new HttpError(409, "O documento já foi enviado.");
+  const issues = validateForSend(b.doc, b.recipients, b.fields);
+  if (issues.length) throw new HttpError(422, issues.map((i) => i.message).join("\n"), "validation");
+  if (b.doc.expires_at && new Date(b.doc.expires_at) < new Date(Date.now() + 3600_000)) {
+    throw new HttpError(422, "O prazo tem de ser pelo menos daqui a uma hora.", "validation");
+  }
+  if (b.doc.original_path !== `${b.doc.workspace_id}/${b.doc.id}/original.pdf`) {
+    throw new HttpError(422, "Ficheiro do documento inválido.", "validation");
+  }
+  const pdf = await download(sb, b.doc.original_path!);
+  const pages = await assertValidPdf(pdf).catch((e) => {
+    throw new HttpError(422, (e as Error).message, "invalid_pdf");
+  });
+  if (b.fields.some((f) => f.page > pages)) throw new HttpError(422, "Há campos em páginas que não existem no PDF.", "validation");
+  const hash = await sha256Hex(pdf);
+  for (const r of b.recipients) {
+    await sb
+      .from("recipients")
+      .update({
+        token_hash: r.role === "signer" ? await tokenHash(await signerToken(r)) : null,
+        status: "pending",
+        notified_at: null,
+        notified_phase: null,
+      })
+      .eq("id", r.id);
+  }
+  const { data: updated } = await sb
+    .from("documents")
+    .update({ status: "in_progress", sent_at: new Date().toISOString(), phase: "fill", original_sha256: hash, page_count: pages })
+    .eq("id", b.doc.id)
+    .eq("status", "draft")
+    .select("id");
+  if (!updated?.length) throw new HttpError(409, "O documento já foi enviado.");
+  await audit(sb, b.doc.id, "document.sent", {
+    actorUserId: o.actorUserId ?? null,
+    ip: o.ip,
+    ua: o.ua,
+    details: {
+      original_sha256: hash,
+      mode: b.doc.signature_mode,
+      sequential: b.doc.sequential,
+      recipients: b.recipients.map((r) => ({ name: r.name, email: r.email, role: r.role, order: r.signing_order, in_person: !!r.in_person })),
+    },
+  });
+  await advance(sb, b.doc.id);
 }
 
 /** Estados em que um destinatário ainda pode ser corrigido ou delegar (ainda não agiu). */
@@ -228,6 +293,12 @@ async function notifyCurrent(sb: SupabaseClient, b: Bundle) {
   for (const r of current) {
     if (r.notified_phase === b.doc.phase && r.notified_at) continue;
     const step = b.doc.signature_mode === "qualified" ? b.doc.phase : "sign";
+    if (r.in_person) {
+      // Sem convite: o colaborador abre a assinatura no seu dispositivo.
+      await sb.from("recipients").update({ notified_at: new Date().toISOString(), notified_phase: b.doc.phase, status: r.status === "pending" ? "notified" : r.status }).eq("id", r.id);
+      await audit(sb, b.doc.id, "recipient.awaiting_in_person", { recipientId: r.id });
+      continue;
+    }
     const mail = inviteEmail({
       recipientName: r.name,
       senderName: ownerName(b),
@@ -252,6 +323,7 @@ async function notifyCurrent(sb: SupabaseClient, b: Bundle) {
 }
 
 export async function remind(sb: SupabaseClient, b: Bundle, r: RecipientRow): Promise<void> {
+  if (r.in_person || !r.email) return;
   const step = b.doc.signature_mode === "qualified" ? b.doc.phase : "sign";
   const mail = inviteEmail({
     recipientName: r.name,
@@ -384,7 +456,7 @@ async function finalize(sb: SupabaseClient, b: Bundle) {
   }
   const people = new Map<string, string>();
   people.set(b.owner.email.toLowerCase(), ownerName(b));
-  for (const r of b.recipients) if (r.status !== "declined") people.set(r.email.toLowerCase(), r.name);
+  for (const r of b.recipients) if (r.status !== "declined" && r.email) people.set(r.email.toLowerCase(), r.name);
   for (const [email, name] of people) {
     const mail = completedEmail(name, doc.title, doc.signature_mode, links);
     await deliver(sb, { to: email, subject: mail.subject, html: mail.html, kind: "completed", documentId: doc.id, attachments });

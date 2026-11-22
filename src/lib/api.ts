@@ -40,6 +40,22 @@ export const correctDocument = (
   patch: { recipients?: { id: string; name: string; email: string; civil_id?: string | null }[]; expires_at?: string | null },
 ) => call<{ ok: boolean; changed: number }>("document-actions", { action: "correct", document_id, ...patch }, true);
 
+/** Abre a assinatura de um destinatário presencial neste dispositivo. */
+export const inPersonSession = (document_id: string, recipient_id: string) =>
+  call<{ token: string; session: string }>("document-actions", { action: "in_person", document_id, recipient_id }, true);
+
+/** Formulário público (link ou QR): sem sessão de colaborador. */
+export const publicForm = <T,>(body: Record<string, unknown>) => call<T>("public-form", body, false);
+
+/** Guarda a sessão do signatário para a página /s/:token a usar logo (presencial ou link público). */
+export function rememberSignerSession(token: string, session: string) {
+  try {
+    sessionStorage.setItem(`signed:s:${token.slice(0, 16)}`, session);
+  } catch {
+    /* sem armazenamento: a página pede o código */
+  }
+}
+
 export const convertDocx = (document_id: string) => call<{ ok: boolean; path: string; pages: number }>("convert-docx", { document_id }, true);
 
 export const signerApi = <T,>(body: Record<string, unknown>) => call<T>("signer-api", body, false);

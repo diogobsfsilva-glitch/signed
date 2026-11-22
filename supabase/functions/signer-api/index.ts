@@ -153,13 +153,14 @@ Deno.serve(handler(async (req) => {
   switch (body.action) {
     case "start": {
       return json({
-        recipient: { name: r.name, email: maskEmail(r.email), status: r.status },
+        recipient: { name: r.name, email: r.email ? maskEmail(r.email) : "", status: r.status, in_person: !!r.in_person },
         document: { title: b.doc.title, status: b.doc.status, sender: b.owner.full_name || b.owner.email, mode: b.doc.signature_mode },
       });
     }
 
     case "send-otp": {
       if (b.doc.status !== "in_progress") throw new HttpError(409, "Este documento já não está disponível para assinatura.", "not_active");
+      if (r.in_person || !r.email) throw new HttpError(403, "Esta assinatura é presencial: peça ao colaborador que a abra no dispositivo dele.", "in_person");
       const { data: prev } = await sb.from("signer_otps").select("sent_at").eq("recipient_id", r.id).maybeSingle();
       if (prev && Date.now() - new Date(prev.sent_at).getTime() < OTP_RESEND_MS) {
         throw new HttpError(429, "Aguarde um minuto antes de pedir outro código.", "rate_limited");

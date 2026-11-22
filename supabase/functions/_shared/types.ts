@@ -71,6 +71,8 @@ export interface RecipientRow {
   status: RecipientStatus;
   /** Muda quando o destinatário é corrigido ou delega: o link anterior deixa de funcionar. */
   token_version?: number;
+  /** Assina presencialmente no dispositivo de um colaborador (sem email nem código). */
+  in_person?: boolean;
   notified_at: string | null;
   notified_phase: DocPhase | null;
   reminded_at: string | null;
@@ -226,4 +228,8 @@ export const EVENT_LABELS: Record<string, string> = {
   "recipient.delegated": "Delegou a assinatura",
   "recipient.attachment_added": "Carregou um anexo",
   "document.corrected": "Documento corrigido pelo remetente",
+  "recipient.awaiting_in_person": "À espera da assinatura presencial",
+  "recipient.in_person_started": "Assinatura presencial iniciada",
+  "document.created_from_public_link": "Criado a partir de um link público",
+  "recipient.public_access": "Acedeu pelo link público",
 };

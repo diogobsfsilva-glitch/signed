@@ -20,9 +20,9 @@ Componentes, todos em plano gratuito:
    npx supabase login
    npx supabase link --project-ref <PROJECT_REF>
    npx supabase db push
-   npx supabase functions deploy document-actions signer-api convert-docx reminders --no-verify-jwt
+   npx supabase functions deploy document-actions signer-api convert-docx reminders public-form --no-verify-jwt
    ```
-   (`--no-verify-jwt` é intencional: `signer-api` é pública para os signatários, e as outras validam o utilizador por dentro.)
+   (`--no-verify-jwt` é intencional: `signer-api` e `public-form` são públicas, e as outras validam o utilizador por dentro.)
 3. **Authentication → Providers**: desligar **Email** (em produção só se entra com Microsoft).
 4. **Authentication → URL Configuration**: Site URL = endereço do Cloudflare (passo 5), por exemplo `https://signed.pages.dev`.
 5. **Database → Extensions**: ativar `pg_cron` e `pg_net`.

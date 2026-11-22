@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { supabase, BUCKET } from "../lib/supabase";
-import { correctDocument, documentAction } from "../lib/api";
+import { correctDocument, documentAction, inPersonSession, rememberSignerSession } from "../lib/api";
 import { instantiate } from "../lib/templates";
 import type { AuditEventRow, DocumentRow, RecipientRow } from "../../supabase/functions/_shared/types";
 import { EVENT_LABELS, parseAttachment, type AttachmentValue } from "../../supabase/functions/_shared/types";
@@ -12,7 +12,7 @@ import { useAuth } from "../auth/AuthProvider";
 
 // O token do link nunca é lido pelo cliente (sem permissão nessa coluna).
 const RECIPIENT_COLUMNS =
-  "id, document_id, name, email, role, signing_order, civil_id, color, status, notified_at, viewed_at, filled_at, signed_at, declined_at, decline_reason, sign_ip, sign_user_agent, cert_subject, cert_issuer, cert_serial, cert_serial_number_attr, created_at";
+  "id, document_id, name, email, role, signing_order, civil_id, color, status, in_person, notified_at, viewed_at, filled_at, signed_at, declined_at, decline_reason, sign_ip, sign_user_agent, cert_subject, cert_issuer, cert_serial, cert_serial_number_attr, created_at";
 
 interface EmailRow {
   id: number;
@@ -203,6 +203,26 @@ export function DocumentDetail() {
                       {r.role === "signer" ? <RecipientBadge status={r.status} /> : <span className="text-xs text-slate-400">cópia</span>}
                     </div>
                     <p className="truncate text-xs text-slate-500">{r.email}</p>
+                    {r.in_person && r.role === "signer" && <p className="text-xs text-slate-500">Assinatura presencial</p>}
+                    {r.in_person && doc.status === "in_progress" && ["notified", "viewed"].includes(r.status) && (
+                      <button
+                        className="btn-primary mt-1.5 px-3 py-1 text-xs"
+                        disabled={busy}
+                        onClick={async () => {
+                          setBusy(true);
+                          try {
+                            const s = await inPersonSession(doc.id, r.id);
+                            rememberSignerSession(s.token, s.session);
+                            nav(`/s/${s.token}?presencial=${doc.id}`);
+                          } catch (e) {
+                            toast(errorMessage(e), "error");
+                            setBusy(false);
+                          }
+                        }}
+                      >
+                        Assinar presencialmente agora
+                      </button>
+                    )}
                     {r.signed_at && (
                       <p className="mt-1 flex items-center gap-1 text-xs text-emerald-700">
                         <CheckIcon className="h-3.5 w-3.5" /> {fmtDateTime(r.signed_at)}{r.sign_ip ? ` · IP ${r.sign_ip}` : ""}

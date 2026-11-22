@@ -61,7 +61,7 @@ export interface ValidationIssue {
 /** Validações antes de enviar. */
 export function validateForSend(
   doc: WorkflowDoc & { original_path: string | null; is_template?: boolean },
-  recipients: (R & { name: string; email: string })[],
+  recipients: (R & { name: string; email: string; in_person?: boolean | null })[],
   fields: (F & { id: string; options: string[] | null; value?: string | null; label?: string | null; required?: boolean })[],
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
@@ -72,8 +72,12 @@ export function validateForSend(
   const emails = new Set<string>();
   for (const r of recipients) {
     const e = r.email.trim().toLowerCase();
+    if (r.in_person && doc.signature_mode === "qualified") {
+      issues.push({ message: `${r.name}: a assinatura presencial só existe na assinatura simples.` });
+    }
+    if (r.in_person && r.role !== "signer") issues.push({ message: `${r.name} recebe só cópia e não pode ser presencial.` });
     if (!e) {
-      issues.push({ message: `Falta o email de ${r.name}.` });
+      if (!r.in_person) issues.push({ message: `Falta o email de ${r.name}.` });
       continue;
     }
     if (emails.has(e)) issues.push({ message: `O email ${r.email} aparece repetido.` });
