@@ -116,6 +116,20 @@ export function expiredEmail(ownerName: string, title: string, url: string) {
   };
 }
 
+export function delegatedEmail(ownerName: string, title: string, from: string, to: string, toEmail: string, reason: string | null, url: string) {
+  return {
+    subject: `Assinatura delegada: ${title}`,
+    html: layout(
+      "Uma assinatura foi delegada",
+      para(`Olá ${esc(ownerName)},`) +
+        para(`<strong>${esc(from)}</strong> passou a assinatura do documento <strong>${esc(title)}</strong> para <strong>${esc(to)}</strong> (${esc(toEmail)}).`) +
+        quote(reason) +
+        para("O convite já foi enviado à nova pessoa. Se não concordar, pode cancelar o documento ou corrigir o destinatário."),
+      { label: "Ver documento", url },
+    ),
+  };
+}
+
 export function ccRejectedEmail(ownerName: string, title: string, who: string, reason: string, url: string) {
   return {
     subject: `Assinatura recusada: ${title}`,
@@ -124,7 +138,7 @@ export function ccRejectedEmail(ownerName: string, title: string, who: string, r
       para(`Olá ${esc(ownerName)},`) +
         para(`O Signed recusou o PDF carregado por <strong>${esc(who)}</strong> no documento <strong>${esc(title)}</strong>:`) +
         quote(reason) +
-        para("O signatário pode tentar de novo. Se o nome ou o nº de identificação civil estiverem errados, cancele e reenvie o documento com os dados corretos."),
+        para("O signatário pode tentar de novo. Se o nome ou o nº de identificação civil estiverem errados, use «Corrigir» no documento para os acertar."),
       { label: "Ver documento", url },
     ),
   };

@@ -1,8 +1,8 @@
 import type { FieldType } from "../../supabase/functions/_shared/types";
-import { FIELD_LABELS } from "../../supabase/functions/_shared/types";
+import { FIELD_LABELS, parseAttachment } from "../../supabase/functions/_shared/types";
 
 export function fieldIcon(type: FieldType): string {
-  return { signature: "✍", initials: "AB", text: "T", date: "📅", checkbox: "☑", radio: "◉", dropdown: "▾" }[type];
+  return { signature: "✍", initials: "AB", text: "T", date: "📅", checkbox: "☑", radio: "◉", dropdown: "▾", name: "👤", email: "@", signed_date: "🗓", attachment: "📎" }[type];
 }
 
 /** Mostra o valor de um campo já preenchido (só leitura). */
@@ -15,7 +15,12 @@ export function FieldValue({ type, value, options, height }: { type: FieldType; 
       return value?.startsWith("data:image") ? <img src={value} alt={FIELD_LABELS[type]} className="h-full w-full object-contain" /> : null;
     case "checkbox":
       return value === "true" ? <span className="flex h-full w-full items-center justify-center font-bold" style={{ fontSize: fs }}>✓</span> : null;
-    case "date": {
+    case "attachment": {
+      const a = parseAttachment(value);
+      return a ? <span className="truncate px-1" style={{ fontSize: fs }}>📎 {a.name}</span> : null;
+    }
+    case "date":
+    case "signed_date": {
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value ?? "");
       return <span className="truncate px-1" style={{ fontSize: fs }}>{m ? `${m[3]}/${m[2]}/${m[1]}` : value}</span>;
     }
@@ -43,4 +48,8 @@ export const DEFAULT_SIZE: Record<FieldType, { w: number; h: number }> = {
   checkbox: { w: 16, h: 16 },
   radio: { w: 140, h: 44 },
   dropdown: { w: 140, h: 22 },
+  name: { w: 160, h: 22 },
+  email: { w: 180, h: 22 },
+  signed_date: { w: 96, h: 22 },
+  attachment: { w: 150, h: 26 },
 };

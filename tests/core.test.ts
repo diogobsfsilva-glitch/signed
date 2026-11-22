@@ -16,6 +16,8 @@ import { PT_INTERMEDIATES, PT_TRUST_ANCHORS } from "../supabase/functions/_share
 import { trustStoreFromBase64 } from "../supabase/functions/_shared/pades-verify.ts";
 import { currentRecipients, fillPhaseDone, validateFieldValues, validateForSend } from "../supabase/functions/_shared/workflow.ts";
 import { nameMatches, sha256Hex, fromBase64 } from "../supabase/functions/_shared/util.ts";
+import { autoFieldValue, isSignerInput } from "../supabase/functions/_shared/types.ts";
+import { cellToValue, mapColumns, parseCsv, toCsv } from "../src/lib/csv.ts";
 import { appendIncrementalSignature, testKey, testPem } from "./helpers/incremental.ts";
 
 const PNG_1x1 =
@@ -346,5 +348,85 @@ describe("certificado de conclusão", () => {
     });
     const doc = await PDFDocument.load(bytes);
     expect(doc.getPageCount()).toBeGreaterThan(1);
+  });
+});
+
+describe("grupo 1: campos automáticos, fixos e anexos", () => {
+  it("escreve nome, email, data de assinatura e referência ao anexo no PDF", async () => {
+    const out = await flattenFields(
+      await samplePdf(),
+      [
+        { id: "1", recipient_id: "r", type: "name", page: 1, x: 0.1, y: 0.1, w: 0.3, h: 0.03, value: "Joana Conceição", options: null, label: null },
+        { id: "2", recipient_id: "r", type: "email", page: 1, x: 0.1, y: 0.2, w: 0.3, h: 0.03, value: "joana@exemplo.pt", options: null, label: null },
+        { id: "3", recipient_id: "r", type: "signed_date", page: 1, x: 0.1, y: 0.3, w: 0.2, h: 0.03, value: "2026-11-22", options: null, label: null },
+        { id: "4", recipient_id: "r", type: "attachment", page: 1, x: 0.1, y: 0.4, w: 0.3, h: 0.03, value: JSON.stringify({ path: "a/b/attachments/x", name: "CC.pdf", size: 1, type: "application/pdf", sha256: "0" }), options: null, label: null },
+      ],
+      { mode: "simple" },
+    );
+    expect(await assertValidPdf(out)).toBe(2);
+  });
+
+  it("campos automáticos: valores e regras", () => {
+    const r = { name: "Joana Reis", email: "joana@exemplo.pt" };
+    expect(autoFieldValue("name", r)).toBe("Joana Reis");
+    expect(autoFieldValue("email", r)).toBe("joana@exemplo.pt");
+    // Inverno: Lisboa = UTC, ainda é 31/12.
+    expect(autoFieldValue("signed_date", r, new Date("2026-12-31T23:30:00Z"))).toBe("2026-12-31");
+    // Verão: Lisboa = UTC+1, já é 1/8.
+    expect(autoFieldValue("signed_date", r, new Date("2026-07-31T23:30:00Z"))).toBe("2026-08-01");
+    expect(isSignerInput({ type: "name" }, "simple")).toBe(false);
+    expect(isSignerInput({ type: "text", readonly: true }, "simple")).toBe(false);
+    expect(isSignerInput({ type: "attachment" }, "qualified")).toBe(true);
+    expect(isSignerInput({ type: "signature" }, "qualified")).toBe(false);
+  });
+
+  it("validação antes de enviar: fixo sem valor, pré-preenchido inválido e email em falta", () => {
+    const issues = validateForSend(
+      { signature_mode: "simple", phase: "fill", sequential: true, original_path: "x" },
+      [{ id: "a", role: "signer", signing_order: 1, status: "pending", name: "Ana", email: "" }],
+      [
+        { id: "s", recipient_id: "a", type: "signature", options: null },
+        { id: "t", recipient_id: "a", type: "text", options: null, readonly: true, value: null, label: "Hotel" },
+        { id: "d", recipient_id: "a", type: "dropdown", options: ["A", "B"], value: "C", label: "Lista" },
+      ],
+    ).map((i) => i.message).join(" | ");
+    expect(issues).toContain('fixo "Hotel" não tem valor');
+    expect(issues).toContain("Valor pré-preenchido inválido");
+    expect(issues).toContain("Falta o email de Ana");
+  });
+
+  it("valores submetidos: anexos só com caminho válido e automáticos recusados", () => {
+    const f = [{ id: "1", type: "attachment" as const, required: true, options: null, label: "CC" }];
+    expect(validateFieldValues(f, { "1": "../../etc/passwd" })).toHaveLength(1);
+    expect(validateFieldValues(f, { "1": `${"a".repeat(8)}-0000-0000-0000-${"0".repeat(12)}/${"b".repeat(8)}-0000-0000-0000-${"0".repeat(12)}/attachments/r-f-1-cc.pdf` })).toHaveLength(0);
+    expect(validateFieldValues([{ id: "2", type: "name" as const, required: false, options: null, label: null }], { "2": "Outro" })).toHaveLength(1);
+  });
+});
+
+describe("envio em massa: CSV", () => {
+  it("lê CSV do Excel português (;, BOM, aspas, CRLF, linhas vazias)", () => {
+    const rows = parseCsv('\uFEFFNome;Email;Morada\r\n"Silva; João";joao@x.pt;"Rua ""A"", 1"\r\n\r\nAna;ana@x.pt;\r\n');
+    expect(rows).toEqual([["Nome", "Email", "Morada"], ["Silva; João", "joao@x.pt", 'Rua "A", 1'], ["Ana", "ana@x.pt", ""]]);
+    expect(parseCsv("nome,email\nRui,rui@x.pt")).toEqual([["nome", "email"], ["Rui", "rui@x.pt"]]);
+    expect(parseCsv(toCsv([["a;b", 'c"d'], ["1", "2"]]))).toEqual([["a;b", 'c"d'], ["1", "2"]]);
+  });
+
+  it("identifica colunas pelo nome, sem acentos nem maiúsculas", () => {
+    const c = mapColumns(["Nome completo", "E-mail", "Nº Identificação Civil", "Vencimento", "Hotel ", "Outra"], ["vencimento", "Hotel"]);
+    expect(c.name).toBe(0);
+    expect(c.email).toBe(1);
+    expect(c.civilId).toBe(2); // "Nº Identificação Civil" -> "n identificacao civil"
+    expect([...c.fields.values()]).toEqual(["vencimento", "hotel"]);
+    expect(c.unknown).toContain("Outra");
+  });
+
+  it("converte células em valores dos campos", () => {
+    expect(cellToValue("date", "5/3/2027", null)).toEqual({ value: "2027-03-05" });
+    expect(cellToValue("date", "2027-03-05", null)).toEqual({ value: "2027-03-05" });
+    expect(cellToValue("date", "amanhã", null).error).toBeTruthy();
+    expect(cellToValue("checkbox", "Não", null)).toEqual({ value: "false" });
+    expect(cellToValue("dropdown", "porto", ["Lisboa", "Porto"])).toEqual({ value: "Porto" });
+    expect(cellToValue("dropdown", "Faro", ["Lisboa", "Porto"]).error).toContain("não é uma das opções");
+    expect(cellToValue("text", "  ", null)).toEqual({ value: null });
   });
 });

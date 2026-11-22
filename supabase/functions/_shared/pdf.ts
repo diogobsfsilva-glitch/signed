@@ -1,7 +1,7 @@
 // Escrita dos valores dos campos no PDF ("achatar") e preparação para assinatura CC.
 
 import { degrees, PDFDocument, type PDFFont, type PDFPage, rgb, StandardFonts } from "pdf-lib";
-import type { FieldRow, RecipientRow, SignatureMode } from "./types.ts";
+import { type FieldRow, parseAttachment, type RecipientRow, type SignatureMode } from "./types.ts";
 import { formatDateValue, fromBase64 } from "./util.ts";
 
 export interface PageGeom {
@@ -210,11 +210,19 @@ export async function flattenFields(
         }
         break;
       case "text":
+      case "name":
+      case "email":
         if (v) drawTextIn(page, font, p, v);
         break;
       case "date":
+      case "signed_date":
         if (v) drawTextIn(page, font, p, formatDateValue(v));
         break;
+      case "attachment": {
+        const a = parseAttachment(v);
+        if (a) drawTextIn(page, font, p, `Anexo: ${a.name}`, { maxSize: 9 });
+        break;
+      }
       case "dropdown":
         if (v) drawTextIn(page, font, p, v);
         break;

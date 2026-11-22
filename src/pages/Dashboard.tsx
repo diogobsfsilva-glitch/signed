@@ -16,6 +16,7 @@ interface Row {
   owner_id: string;
   folder_id: string | null;
   workspace_id: string;
+  batch_id: string | null;
   recipients: { name: string; role: string; status: string }[];
   owner: { full_name: string | null; email: string } | null;
 }
@@ -39,6 +40,12 @@ export function Dashboard() {
   const [params, setParams] = useSearchParams();
   const tab = params.get("estado") ?? "all";
   const folder = params.get("pasta");
+  const batch = params.get("lote");
+  const [batchTitle, setBatchTitle] = useState<string | null>(null);
+  useEffect(() => {
+    if (!batch) return setBatchTitle(null);
+    supabase.from("batches").select("title").eq("id", batch).maybeSingle().then(({ data }) => setBatchTitle(data?.title ?? "Lote"));
+  }, [batch]);
   const [q, setQ] = useState("");
   const [rows, setRows] = useState<Row[] | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -49,7 +56,7 @@ export function Dashboard() {
     const [{ data: docs, error }, { data: f }] = await Promise.all([
       supabase
         .from("documents")
-        .select("id, title, status, signature_mode, updated_at, sent_at, owner_id, folder_id, workspace_id, recipients(name, role, status), owner:profiles!documents_owner_id_fkey(full_name, email)")
+        .select("id, title, status, signature_mode, updated_at, sent_at, owner_id, folder_id, workspace_id, batch_id, recipients(name, role, status), owner:profiles!documents_owner_id_fkey(full_name, email)")
         .eq("is_template", false)
         .order("updated_at", { ascending: false })
         .limit(500),
@@ -72,9 +79,10 @@ export function Dashboard() {
       (r) =>
         (!statuses || statuses.includes(r.status)) &&
         (!folder || r.folder_id === folder) &&
+        (!batch || r.batch_id === batch) &&
         (!term || r.title.toLowerCase().includes(term) || r.recipients.some((x) => x.name.toLowerCase().includes(term))),
     );
-  }, [rows, tab, q, folder]);
+  }, [rows, tab, q, folder, batch]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -141,6 +149,12 @@ export function Dashboard() {
             </div>
             <input className="input sm:max-w-60" placeholder="Pesquisar título ou pessoa" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Pesquisar" />
           </div>
+          {batch && (
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-navy-50 px-3 py-2 text-sm text-navy-900">
+              <span>Envio em massa: <strong>{batchTitle}</strong></span>
+              <button className="text-navy-600 underline" onClick={() => set("lote", null)}>Ver todos</button>
+            </div>
+          )}
           <select className="input mt-3 lg:hidden" value={folder ?? ""} onChange={(e) => set("pasta", e.target.value || null)} aria-label="Pasta">
             <option value="">Todas as pastas</option>
             {folders.map((f) => (

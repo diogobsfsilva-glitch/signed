@@ -5,7 +5,16 @@ export type DocStatus = "draft" | "in_progress" | "completed" | "declined" | "ex
 export type DocPhase = "fill" | "sign";
 export type RecipientRole = "signer" | "cc";
 export type RecipientStatus = "pending" | "notified" | "viewed" | "filled" | "signed" | "declined";
-export type FieldType = "signature" | "initials" | "text" | "date" | "checkbox" | "radio" | "dropdown";
+export type FieldType =
+  | "signature" | "initials" | "text" | "date" | "checkbox" | "radio" | "dropdown"
+  | "name" | "email" | "signed_date" | "attachment";
+
+/** Preenchidos automaticamente com os dados do signatário no momento em que assina. */
+export const AUTO_FIELD_TYPES: readonly FieldType[] = ["name", "email", "signed_date"];
+/** Tipos que o remetente pode pré-preencher antes de enviar. */
+export const PREFILLABLE_FIELD_TYPES: readonly FieldType[] = ["text", "date", "checkbox", "radio", "dropdown"];
+export const isAutoField = (t: FieldType) => AUTO_FIELD_TYPES.includes(t);
+export const isPrefillable = (t: FieldType) => PREFILLABLE_FIELD_TYPES.includes(t);
 
 export interface DocumentRow {
   id: string;
@@ -13,6 +22,8 @@ export interface DocumentRow {
   folder_id: string | null;
   owner_id: string;
   title: string;
+  /** Lote de envio em massa (ou null). */
+  batch_id?: string | null;
   /** Modelo: fica sempre em rascunho e é copiado para documentos novos. */
   is_template: boolean;
   status: DocStatus;
@@ -58,6 +69,8 @@ export interface RecipientRow {
   civil_id: string | null;
   color: string;
   status: RecipientStatus;
+  /** Muda quando o destinatário é corrigido ou delega: o link anterior deixa de funcionar. */
+  token_version?: number;
   notified_at: string | null;
   notified_phase: DocPhase | null;
   reminded_at: string | null;
@@ -90,7 +103,28 @@ export interface FieldRow {
   options: string[] | null;
   group_name: string | null;
   value: string | null;
+  /** Pré-preenchido pelo remetente e fixo: o signatário vê mas não altera. */
+  readonly?: boolean;
   filled_at: string | null;
+}
+
+/** Valor guardado num campo de anexo (JSON). */
+export interface AttachmentValue {
+  path: string;
+  name: string;
+  size: number;
+  type: string;
+  sha256: string;
+}
+
+export function parseAttachment(v: string | null | undefined): AttachmentValue | null {
+  if (!v || !v.startsWith("{")) return null;
+  try {
+    const a = JSON.parse(v);
+    return typeof a?.path === "string" && typeof a?.name === "string" ? a : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface AuditEventRow {
@@ -107,10 +141,30 @@ export interface AuditEventRow {
   hash: string;
 }
 
-/** Campos que o signatário preenche na fase de preenchimento (tudo exceto assinaturas no modo CC). */
+/**
+ * Tipos que o signatário preenche na fase de preenchimento: no modo CC tudo exceto assinaturas;
+ * os campos automáticos nunca são preenchidos pelo signatário.
+ */
 export function isFillField(type: FieldType, mode: SignatureMode): boolean {
+  if (isAutoField(type)) return false;
   if (mode === "simple") return true;
   return type !== "signature" && type !== "initials";
+}
+
+/** O signatário tem de dar um valor a este campo (não é automático nem fixo pelo remetente)? */
+export function isSignerInput(f: { type: FieldType; readonly?: boolean | null }, mode: SignatureMode): boolean {
+  return !f.readonly && isFillField(f.type, mode);
+}
+
+/** Valor de um campo automático para um signatário, no momento dado (data em Lisboa). */
+export function autoFieldValue(type: FieldType, r: { name: string; email: string }, now = new Date()): string | null {
+  if (type === "name") return r.name;
+  if (type === "email") return r.email;
+  if (type === "signed_date") {
+    const p = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+    return p; // AAAA-MM-DD
+  }
+  return null;
 }
 
 export const FIELD_LABELS: Record<FieldType, string> = {
@@ -121,6 +175,10 @@ export const FIELD_LABELS: Record<FieldType, string> = {
   checkbox: "Caixa de seleção",
   radio: "Opção única",
   dropdown: "Lista",
+  name: "Nome",
+  email: "Email",
+  signed_date: "Data de assinatura",
+  attachment: "Anexo",
 };
 
 export const STATUS_LABELS: Record<DocStatus, string> = {
@@ -165,4 +223,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "recipient.cc_rejected": "Assinatura CC recusada",
   "recipient.cc_signed": "Assinou com Cartão de Cidadão",
   "recipient.declined": "Rejeitou o documento",
+  "recipient.delegated": "Delegou a assinatura",
+  "recipient.attachment_added": "Carregou um anexo",
+  "document.corrected": "Documento corrigido pelo remetente",
 };

@@ -13,6 +13,7 @@ import { DocumentDetail } from "./pages/DocumentDetail";
 import { Admin } from "./pages/Admin";
 import { Sign } from "./pages/Sign";
 import { Templates } from "./pages/Templates";
+import { BulkSend } from "./pages/BulkSend";
 
 function Protected() {
   const { loading, session, profile } = useAuth();
@@ -42,6 +43,7 @@ createRoot(document.getElementById("root")!).render(
                   <Route index element={<Dashboard />} />
                   <Route path="novo" element={<NewDocument />} />
                   <Route path="modelos" element={<Templates />} />
+                  <Route path="modelos/:id/envio-em-massa" element={<BulkSend />} />
                   <Route path="documentos/:id/editar" element={<Editor />} />
                   <Route path="documentos/:id" element={<DocumentDetail />} />
                   <Route

@@ -34,6 +34,12 @@ async function call<T>(fn: string, body: unknown, auth: boolean): Promise<T> {
 export const documentAction = (action: "send" | "cancel" | "remind", document_id: string, recipient_id?: string) =>
   call<{ ok: boolean }>("document-actions", { action, document_id, recipient_id }, true);
 
+/** Corrige destinatários ainda por assinar e/ou o prazo de um documento em curso. */
+export const correctDocument = (
+  document_id: string,
+  patch: { recipients?: { id: string; name: string; email: string; civil_id?: string | null }[]; expires_at?: string | null },
+) => call<{ ok: boolean; changed: number }>("document-actions", { action: "correct", document_id, ...patch }, true);
+
 export const convertDocx = (document_id: string) => call<{ ok: boolean; path: string; pages: number }>("convert-docx", { document_id }, true);
 
 export const signerApi = <T,>(body: Record<string, unknown>) => call<T>("signer-api", body, false);

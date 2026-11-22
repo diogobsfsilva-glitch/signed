@@ -1,10 +1,10 @@
 // Regras do fluxo de assinatura (puras, testáveis).
 
 import type { DocPhase, FieldRow, RecipientRow, SignatureMode } from "./types.ts";
-import { isFillField } from "./types.ts";
+import { FIELD_LABELS, isPrefillable, isSignerInput } from "./types.ts";
 
 type R = Pick<RecipientRow, "id" | "role" | "signing_order" | "status">;
-type F = Pick<FieldRow, "recipient_id" | "type">;
+type F = Pick<FieldRow, "recipient_id" | "type"> & { readonly?: boolean | null };
 
 export interface WorkflowDoc {
   signature_mode: SignatureMode;
@@ -22,7 +22,7 @@ function pendingInPhase<T extends R>(doc: WorkflowDoc, recipients: T[], fields: 
     return signers.filter(
       (r) =>
         !["filled", "signed"].includes(r.status) &&
-        fields.some((f) => f.recipient_id === r.id && isFillField(f.type, "qualified")),
+        fields.some((f) => f.recipient_id === r.id && isSignerInput(f, "qualified")),
     );
   }
   return signers.filter((r) => r.status !== "signed");
@@ -62,7 +62,7 @@ export interface ValidationIssue {
 export function validateForSend(
   doc: WorkflowDoc & { original_path: string | null; is_template?: boolean },
   recipients: (R & { name: string; email: string })[],
-  fields: (F & { id: string; options: string[] | null })[],
+  fields: (F & { id: string; options: string[] | null; value?: string | null; label?: string | null; required?: boolean })[],
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   if (doc.is_template) issues.push({ message: "Um modelo não pode ser enviado. Use-o para criar um documento." });
@@ -95,6 +95,12 @@ export function validateForSend(
     if (doc.signature_mode === "qualified" && f.type === "initials") {
       issues.push({ message: "No modo Cartão de Cidadão não há campos de iniciais (a assinatura qualificada é única)." });
     }
+    const name = f.label || FIELD_LABELS[f.type];
+    if (f.readonly && !f.value) issues.push({ message: `O campo fixo "${name}" não tem valor.` });
+    if (f.value && isPrefillable(f.type)) {
+      const errs = validateFieldValues([{ id: f.id, type: f.type, required: false, options: f.options, label: name }], { [f.id]: f.value });
+      for (const e of errs) issues.push({ message: `Valor pré-preenchido inválido: ${e}` });
+    }
   }
   return dedupe(issues);
 }
@@ -113,7 +119,7 @@ export function validateFieldValues(
   for (const f of fields) {
     const v = values[f.id];
     const empty = v === undefined || v === null || v === "" || (f.type === "checkbox" && v !== "true");
-    const name = f.label || f.type;
+    const name = f.label || FIELD_LABELS[f.type];
     if (f.required && empty) {
       errors.push(`Preencha o campo obrigatório "${name}".`);
       continue;
@@ -138,6 +144,15 @@ export function validateFieldValues(
         break;
       case "text":
         if (v!.length > 500) errors.push(`Texto demasiado longo em "${name}".`);
+        break;
+      case "attachment":
+        // O servidor confirma depois que o ficheiro existe e pertence a este signatário.
+        if (!/^[0-9a-f-]{36}\/[0-9a-f-]{36}\/attachments\/[A-Za-z0-9._-]{1,200}$/.test(v!)) errors.push(`Anexo inválido em "${name}".`);
+        break;
+      case "name":
+      case "email":
+      case "signed_date":
+        errors.push(`O campo "${name}" é preenchido automaticamente.`);
         break;
     }
   }

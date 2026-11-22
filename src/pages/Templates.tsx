@@ -109,6 +109,14 @@ export function Templates() {
                     <button className="btn-primary flex-1" onClick={() => setUsing(r)} disabled={!r.original_path || signers.length === 0}>
                       Usar
                     </button>
+                    <button
+                      className="btn-secondary"
+                      onClick={() => nav(`/modelos/${r.id}/envio-em-massa`)}
+                      disabled={!r.original_path || signers.length === 0}
+                      title="Enviar a muitas pessoas a partir de um ficheiro CSV"
+                    >
+                      Em massa
+                    </button>
                     {canEdit(r) && (
                       <button className="btn-secondary" onClick={() => nav(`/documentos/${r.id}/editar`)}>
                         Editar

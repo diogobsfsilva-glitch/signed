@@ -15,7 +15,7 @@ Produto interno da Altis com as funcionalidades do signNow. É uma implementaç�
 ## Fases
 
 - **Fase 1 (MVP), concluída**: ver o README.
-- **Fase 2, produtividade**: ~~modelos~~ (feito), envio em massa por CSV, links de assinatura reutilizáveis, envio agendado, campos condicionais e calculados, pacotes de documentos, partilha de pastas, relatórios, marca por hotel.
+- **Fase 2, produtividade**: ~~modelos~~, ~~envio em massa por CSV~~, ~~corrigir e delegar~~, ~~campos automáticos e pré-preenchidos~~, ~~anexos do signatário~~ (feitos), links de assinatura reutilizáveis, envio agendado, campos condicionais e calculados, pacotes de documentos, partilha de pastas, relatórios, marca por hotel.
 - **Fase 3, enterprise**: envio e autenticação por SMS, fluxos de aprovação, pagamentos (Stripe), API pública com webhooks, assinatura embebida, integrações (Drive, OneDrive, Zapier), interface em EN/ES/FR.
 - **Fase 4, assinatura qualificada integrada**:
   - Opção C (CMD via AMA): tudo no browser. Exige protocolo e certificação com a AMA (contacto eid@ama.pt). **Pedir já**, porque o prazo não depende de nós.

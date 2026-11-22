@@ -25,6 +25,8 @@ export interface AuditCertificateInput {
   >[];
   events: Pick<AuditEventRow, "event" | "created_at" | "recipient_id" | "ip" | "hash">[];
   chainIntact: boolean;
+  /** Anexos carregados pelos signatários. */
+  attachments?: { recipient: string; name: string; size: number; sha256: string }[];
 }
 
 const A4 = { w: 595.28, h: 841.89 };
@@ -145,6 +147,18 @@ export async function buildAuditCertificate(input: AuditCertificateInput): Promi
     if (r.cert_serial) w.kv("Nº de série", r.cert_serial);
     if (r.decline_reason) w.kv("Motivo da rejeição", r.decline_reason);
     w.gap(6);
+  }
+
+  if (input.attachments?.length) {
+    w.text("Anexos dos signatários", { size: 13, bold: true });
+    w.rule();
+    for (const a of input.attachments) {
+      w.text(`${a.name} — ${a.recipient}`, { bold: true, size: 9.5 });
+      w.kv("Tamanho", `${Math.max(1, Math.round(a.size / 1024))} KB`);
+      w.kv("SHA-256", a.sha256);
+      w.gap(4);
+    }
+    w.gap(4);
   }
 
   w.text("Histórico", { size: 13, bold: true });

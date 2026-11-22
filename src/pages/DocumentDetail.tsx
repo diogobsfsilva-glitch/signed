@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { supabase, BUCKET } from "../lib/supabase";
-import { documentAction } from "../lib/api";
+import { correctDocument, documentAction } from "../lib/api";
 import { instantiate } from "../lib/templates";
 import type { AuditEventRow, DocumentRow, RecipientRow } from "../../supabase/functions/_shared/types";
-import { EVENT_LABELS } from "../../supabase/functions/_shared/types";
-import { Alert, CheckIcon, DownloadIcon, FullPageSpinner, IdIcon, ModeBadge, RecipientBadge, ShieldIcon, StatusBadge, toast } from "../components/ui";
+import { EVENT_LABELS, parseAttachment, type AttachmentValue } from "../../supabase/functions/_shared/types";
+import { Alert, CheckIcon, DownloadIcon, FullPageSpinner, IdIcon, Modal, ModeBadge, RecipientBadge, ShieldIcon, Spinner, StatusBadge, toast } from "../components/ui";
 import { PdfPages } from "../components/PdfPages";
 import { errorMessage, fmtDateTime } from "../lib/format";
 import { useAuth } from "../auth/AuthProvider";
@@ -34,6 +34,8 @@ export function DocumentDetail() {
   const [emails, setEmails] = useState<EmailRow[]>([]);
   // Modo de teste: texto dos emails não enviados (link e código), para reencaminhar à mão.
   const [bodies, setBodies] = useState<Map<number, string>>(new Map());
+  const [attachments, setAttachments] = useState<{ id: string; recipient_id: string; label: string | null; file: AttachmentValue }[]>([]);
+  const [correcting, setCorrecting] = useState(false);
   const [chainOk, setChainOk] = useState<boolean | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -43,13 +45,20 @@ export function DocumentDetail() {
   const load = useCallback(async () => {
     const { data: d } = await supabase.from("documents").select("*").eq("id", id!).maybeSingle();
     if (!d) return setMissing(true);
-    const [{ data: r }, { data: ev }, { data: em }, { data: ok }, { data: tb }] = await Promise.all([
+    const [{ data: r }, { data: ev }, { data: em }, { data: ok }, { data: tb }, { data: at }] = await Promise.all([
       supabase.from("recipients").select(RECIPIENT_COLUMNS).eq("document_id", d.id).order("signing_order").order("created_at"),
       supabase.from("audit_events").select("*").eq("document_id", d.id).order("id"),
       supabase.from("email_log").select("id, to_email, subject, kind, status, error, created_at").eq("document_id", d.id).order("id", { ascending: false }),
       supabase.rpc("verify_audit_chain", { p_document_id: d.id }),
       supabase.rpc("test_email_bodies", { p_document_id: d.id }),
+      supabase.from("fields").select("id, recipient_id, label, value").eq("document_id", d.id).eq("type", "attachment").not("value", "is", null),
     ]);
+    setAttachments(
+      (at ?? []).flatMap((f) => {
+        const file = parseAttachment(f.value);
+        return file ? [{ id: f.id, recipient_id: f.recipient_id, label: f.label, file }] : [];
+      }),
+    );
     setBodies(new Map(((tb as { id: number; body_text: string | null }[] | null) ?? []).filter((x) => x.body_text).map((x) => [x.id, x.body_text!])));
     setDoc(d);
     setRecipients((r as unknown as RecipientRow[]) ?? []);
@@ -125,6 +134,7 @@ export function DocumentDetail() {
           {doc.status === "in_progress" && (
             <>
               <button className="btn-secondary" disabled={busy} onClick={() => act("remind")}>Enviar lembrete</button>
+              <button className="btn-secondary" disabled={busy} onClick={() => setCorrecting(true)} title="Corrigir nome, email ou prazo sem cancelar">Corrigir</button>
               <button className="btn-danger" disabled={busy} onClick={() => act("cancel")}>Cancelar</button>
             </>
           )}
@@ -214,6 +224,27 @@ export function DocumentDetail() {
             </ol>
           </section>
 
+          {attachments.length > 0 && (
+            <section className="card p-4">
+              <h2 className="font-semibold">Anexos dos signatários</h2>
+              <ul className="mt-3 space-y-2">
+                {attachments.map((a) => (
+                  <li key={a.id} className="flex items-center gap-2 text-sm">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">📎 {a.file.name}</span>
+                      <span className="block truncate text-xs text-slate-500">
+                        {names.get(a.recipient_id)}{a.label ? ` · ${a.label}` : ""} · {Math.max(1, Math.round(a.file.size / 1024))} KB
+                      </span>
+                    </span>
+                    <button className="btn-ghost shrink-0 px-2" onClick={() => download(a.file.path, a.file.name)} aria-label={`Descarregar ${a.file.name}`}>
+                      <DownloadIcon className="h-4 w-4" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           <section className="card p-4">
             <div className="flex gap-4 border-b border-slate-100 text-sm">
               <button className={`-mb-px border-b-2 pb-2 font-medium ${tab === "history" ? "border-navy-900" : "border-transparent text-slate-500"}`} onClick={() => setTab("history")}>Histórico</button>
@@ -261,7 +292,94 @@ export function DocumentDetail() {
           </section>
         </div>
       </div>
+      <CorrectModal open={correcting} onClose={() => setCorrecting(false)} doc={doc} recipients={recipients} onDone={() => { setCorrecting(false); load(); }} />
     </div>
+  );
+}
+
+/** Corrige destinatários que ainda não agiram e o prazo, sem cancelar o documento. */
+function CorrectModal({ open, onClose, doc, recipients, onDone }: { open: boolean; onClose: () => void; doc: DocumentRow; recipients: RecipientRow[]; onDone: () => void }) {
+  const editable = (r: RecipientRow) => r.role === "cc" || ["pending", "notified", "viewed"].includes(r.status);
+  const [rows, setRows] = useState<Record<string, { name: string; email: string; civil_id: string }>>({});
+  const [deadline, setDeadline] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    setRows(Object.fromEntries(recipients.map((r) => [r.id, { name: r.name, email: r.email, civil_id: r.civil_id ?? "" }])));
+    setDeadline(doc.expires_at ? new Date(doc.expires_at).toISOString().slice(0, 10) : "");
+    setError(null);
+  }, [open, recipients, doc.expires_at]);
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const changed = recipients
+        .filter((r) => editable(r))
+        .map((r) => ({ id: r.id, ...rows[r.id], civil_id: rows[r.id].civil_id.replace(/\D/g, "") || null }))
+        .filter((c) => {
+          const r = recipients.find((x) => x.id === c.id)!;
+          return c.name.trim() !== r.name || c.email.trim().toLowerCase() !== r.email || (c.civil_id ?? null) !== (r.civil_id ?? null);
+        });
+      const oldDeadline = doc.expires_at ? new Date(doc.expires_at).toISOString().slice(0, 10) : "";
+      const patch: Parameters<typeof correctDocument>[1] = {};
+      if (changed.length) patch.recipients = changed;
+      if (deadline !== oldDeadline) patch.expires_at = deadline ? new Date(`${deadline}T23:59:00`).toISOString() : null;
+      if (!patch.recipients && patch.expires_at === undefined) return onClose();
+      await correctDocument(doc.id, patch);
+      toast(changed.some((c) => c.email.trim().toLowerCase() !== recipients.find((r) => r.id === c.id)!.email) ? "Corrigido. O convite foi reenviado para o novo email." : "Corrigido.");
+      onDone();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Corrigir documento" wide>
+      <p className="text-sm text-slate-600">
+        Pode corrigir quem ainda não assinou. Se mudar o email, o link antigo deixa de funcionar e a nova pessoa recebe o convite (é assim que se reatribui a assinatura).
+      </p>
+      <ol className="mt-4 space-y-2.5">
+        {recipients.map((r) => {
+          const v = rows[r.id];
+          if (!v) return null;
+          const can = editable(r);
+          return (
+            <li key={r.id} className="rounded-lg border border-slate-200 p-3">
+              <div className="mb-2 flex items-center gap-2 text-sm">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ background: r.color }} />
+                <span className="font-medium">{r.name}</span>
+                {r.role === "signer" ? <RecipientBadge status={r.status} /> : <span className="text-xs text-slate-400">cópia</span>}
+              </div>
+              {can ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input className="input" value={v.name} maxLength={200} onChange={(e) => setRows((x) => ({ ...x, [r.id]: { ...v, name: e.target.value } }))} aria-label={`Nome de ${r.name}`} />
+                  <input className="input" type="email" value={v.email} onChange={(e) => setRows((x) => ({ ...x, [r.id]: { ...v, email: e.target.value } }))} aria-label={`Email de ${r.name}`} />
+                  {doc.signature_mode === "qualified" && r.role === "signer" && (
+                    <input className="input sm:col-span-2" inputMode="numeric" placeholder="Nº de identificação civil (opcional)" value={v.civil_id} onChange={(e) => setRows((x) => ({ ...x, [r.id]: { ...v, civil_id: e.target.value } }))} />
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">{r.email} · já não pode ser alterado.</p>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      <div className="mt-4 max-w-xs">
+        <label className="label" htmlFor="corr-exp">Prazo</label>
+        <input id="corr-exp" type="date" className="input" min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)} value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+        <p className="mt-1 text-xs text-slate-500">Deixe vazio para não ter prazo.</p>
+      </div>
+      {error && <div className="mt-3"><Alert>{error}</Alert></div>}
+      <div className="mt-5 flex justify-end gap-2">
+        <button className="btn-secondary" onClick={onClose}>Voltar</button>
+        <button className="btn-primary" disabled={busy} onClick={save}>{busy && <Spinner className="h-4 w-4 text-white" />} Guardar correções</button>
+      </div>
+    </Modal>
   );
 }
 

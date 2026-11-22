@@ -2,11 +2,11 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { clientIp, handler, HttpError, json, readJson, userAgent } from "../_shared/http.ts";
-import { advance, audit, BUCKET, type Bundle, docFolder, download, loadBundle, serviceClient, tokenHash, upload } from "../_shared/engine.ts";
-import { ccRejectedEmail, declinedEmail, deliver, otpEmail } from "../_shared/email.ts";
+import { advance, audit, BUCKET, type Bundle, docFolder, download, fillAutoFields, loadBundle, REASSIGNABLE, reassignRecipient, serviceClient, tokenHash, upload } from "../_shared/engine.ts";
+import { ccRejectedEmail, declinedEmail, delegatedEmail, deliver, otpEmail } from "../_shared/email.ts";
 import { currentRecipients } from "../_shared/workflow.ts";
 import { validateFieldValues } from "../_shared/workflow.ts";
-import { isFillField, type RecipientRow } from "../_shared/types.ts";
+import { type AttachmentValue, type FieldRow, isSignerInput, type RecipientRow } from "../_shared/types.ts";
 import { maskEmail, nameMatches, randomCode, randomToken, sha256Hex } from "../_shared/util.ts";
 import { matchSigner, trustStoreFromBase64, VerifyError, verifyIncrementalQualifiedSignature } from "../_shared/pades-verify.ts";
 import { PT_INTERMEDIATES, PT_TRUST_ANCHORS } from "../_shared/trust-pt.ts";
@@ -24,6 +24,51 @@ interface Body {
   values?: Record<string, string | null>;
   reason?: string;
   path?: string;
+  field_id?: string;
+  file_name?: string;
+  name?: string;
+  email?: string;
+}
+
+const MAX_ATTACHMENT = 10 * 1024 * 1024;
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/** Nome de ficheiro seguro para o caminho no Storage (mantém a extensão). */
+function safeName(name: string): string {
+  const clean = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9._-]+/g, "_").replace(/_+/g, "_");
+  return clean.slice(-80).replace(/^[._]+/, "") || "anexo";
+}
+
+/** Tipo real do ficheiro pelos primeiros bytes (não confia na extensão). */
+function sniff(bytes: Uint8Array): string | null {
+  if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return "application/pdf";
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  return null;
+}
+
+/** Confirma o ficheiro carregado e devolve os dados guardados no campo. */
+async function attachmentValue(sb: SupabaseClient, b: Bundle, r: RecipientRow, f: FieldRow, path: string): Promise<AttachmentValue> {
+  const prefix = `${docFolder(b.doc)}/attachments/${r.id}-${f.id}-`;
+  if (!path.startsWith(prefix)) throw new HttpError(400, "Anexo inválido.", "invalid_values");
+  let bytes: Uint8Array;
+  try {
+    bytes = await download(sb, path);
+  } catch {
+    throw new HttpError(400, "O anexo não foi carregado. Tente de novo.", "invalid_values");
+  }
+  const type = sniff(bytes);
+  if (!type) {
+    await sb.storage.from(BUCKET).remove([path]);
+    throw new HttpError(422, "O anexo tem de ser um PDF ou uma imagem (JPG ou PNG).", "invalid_values");
+  }
+  if (bytes.length > MAX_ATTACHMENT) {
+    await sb.storage.from(BUCKET).remove([path]);
+    throw new HttpError(422, "O anexo tem mais de 10 MB.", "invalid_values");
+  }
+  const rest = path.slice(prefix.length);
+  const name = rest.slice(rest.indexOf("-") + 1) || "anexo";
+  return { path, name, size: bytes.length, type, sha256: await sha256Hex(bytes) };
 }
 
 let trustCache: ReturnType<typeof trustStoreFromBase64> | null = null;
@@ -191,8 +236,8 @@ Deno.serve(handler(async (req) => {
         fields: showOverlay
           ? st.myFields.map((f) => ({
             id: f.id, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required,
-            label: f.label, options: f.options, value: f.value,
-            editable: b.doc.signature_mode === "simple" || isFillField(f.type, "qualified"),
+            label: f.label, options: f.options, value: f.value, readonly: !!f.readonly,
+            editable: isSignerInput(f, b.doc.signature_mode),
           }))
           : [],
         others,
@@ -202,15 +247,24 @@ Deno.serve(handler(async (req) => {
     case "submit": {
       const st = docState(b, r);
       if (st.step !== "sign_simple" && st.step !== "fill") throw new HttpError(409, "Não é possível submeter neste momento.", "wrong_step");
-      const editable = st.myFields.filter((f) => b.doc.signature_mode === "simple" || isFillField(f.type, "qualified"));
+      const editable = st.myFields.filter((f) => isSignerInput(f, b.doc.signature_mode));
       const values = body.values ?? {};
       const errors = validateFieldValues(editable, values);
       if (errors.length) throw new HttpError(422, errors.join(" "), "invalid_values");
+      const attachments = new Map<string, AttachmentValue>();
+      for (const f of editable.filter((x) => x.type === "attachment" && values[x.id])) {
+        attachments.set(f.id, await attachmentValue(sb, b, r, f, values[f.id]!));
+      }
       const now = new Date().toISOString();
       for (const f of editable) {
         const v = values[f.id];
-        await sb.from("fields").update({ value: v === undefined || v === "" ? null : v, filled_at: now }).eq("id", f.id);
+        const stored = attachments.has(f.id) ? JSON.stringify(attachments.get(f.id)) : v === undefined || v === "" ? null : v;
+        await sb.from("fields").update({ value: stored, filled_at: now }).eq("id", f.id);
       }
+      for (const a of attachments.values()) {
+        await audit(sb, b.doc.id, "recipient.attachment_added", { recipientId: r.id, ip, ua, details: { name: a.name, size: a.size, sha256: a.sha256 } });
+      }
+      if (b.doc.signature_mode === "simple") await fillAutoFields(sb, b, r, new Date(now));
       const valuesHash = await sha256Hex(JSON.stringify(editable.map((f) => [f.id, values[f.id] ?? null])));
       if (b.doc.signature_mode === "simple") {
         await sb.from("recipients").update({ status: "signed", signed_at: now, filled_at: now, sign_ip: ip, sign_user_agent: ua }).eq("id", r.id);
@@ -233,6 +287,41 @@ Deno.serve(handler(async (req) => {
       await audit(sb, b.doc.id, "document.declined", { recipientId: r.id });
       const mail = declinedEmail(b.owner.full_name || b.owner.email, b.doc.title, r.name, reason, `${appUrl()}/documentos/${b.doc.id}`);
       await deliver(sb, { to: b.owner.email, subject: mail.subject, html: mail.html, kind: "declined", documentId: b.doc.id });
+      return json({ ok: true });
+    }
+
+    case "attachment-upload-url": {
+      const st = docState(b, r);
+      if (st.step !== "sign_simple" && st.step !== "fill") throw new HttpError(409, "Não é possível carregar anexos neste momento.", "wrong_step");
+      const f = st.myFields.find((x) => x.id === body.field_id && x.type === "attachment");
+      if (!f) throw new HttpError(404, "Campo de anexo não encontrado.");
+      const name = safeName(body.file_name ?? "anexo");
+      if (!/\.(pdf|jpe?g|png)$/i.test(name)) throw new HttpError(422, "O anexo tem de ser um PDF ou uma imagem (JPG ou PNG).", "invalid_values");
+      const path = `${docFolder(b.doc)}/attachments/${r.id}-${f.id}-${Date.now()}-${name}`;
+      const { data, error } = await sb.storage.from(BUCKET).createSignedUploadUrl(path);
+      if (error) throw error;
+      return json({ path, uploadToken: data.token });
+    }
+
+    case "delegate": {
+      if (b.doc.status !== "in_progress" || !REASSIGNABLE.includes(r.status)) {
+        throw new HttpError(409, "Já não é possível delegar este documento.", "wrong_step");
+      }
+      const name = (body.name ?? "").trim();
+      const email = (body.email ?? "").trim().toLowerCase();
+      const reason = (body.reason ?? "").trim().slice(0, 1000) || null;
+      if (!name || name.length > 200) throw new HttpError(422, "Indique o nome da pessoa.", "validation");
+      if (!EMAIL_RE.test(email)) throw new HttpError(422, "Indique um email válido.", "validation");
+      if (email === r.email.toLowerCase()) throw new HttpError(422, "Indique o email de outra pessoa.", "validation");
+      if (b.recipients.some((x) => x.id !== r.id && x.email.toLowerCase() === email)) {
+        throw new HttpError(422, "Essa pessoa já é destinatária deste documento.", "validation");
+      }
+      const from = { name: r.name, email: r.email };
+      await reassignRecipient(sb, r, { name, email, civil_id: null });
+      await audit(sb, b.doc.id, "recipient.delegated", { recipientId: r.id, ip, ua, details: { from, to: { name, email }, reason } });
+      const mail = delegatedEmail(b.owner.full_name || b.owner.email, b.doc.title, from.name, name, email, reason, `${appUrl()}/documentos/${b.doc.id}`);
+      await deliver(sb, { to: b.owner.email, subject: mail.subject, html: mail.html, kind: "delegated", documentId: b.doc.id });
+      await advance(sb, b.doc.id);
       return json({ ok: true });
     }
 

@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { ApiError, signerApi } from "../lib/api";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, BUCKET } from "../lib/supabase";
 import type { FieldType } from "../../supabase/functions/_shared/types";
-import { FIELD_LABELS } from "../../supabase/functions/_shared/types";
+import { FIELD_LABELS, isAutoField } from "../../supabase/functions/_shared/types";
 import { PdfPages } from "../components/PdfPages";
 import { SignaturePad } from "../components/SignaturePad";
 import { FieldValue } from "../components/FieldBox";
@@ -30,6 +30,7 @@ interface SField {
   label: string | null;
   options: string[] | null;
   value: string | null;
+  readonly?: boolean;
   editable: boolean;
 }
 interface LoadInfo {
@@ -56,7 +57,7 @@ export function Sign() {
     }
   });
   const [info, setInfo] = useState<LoadInfo | null>(null);
-  const [finished, setFinished] = useState<null | "signed" | "filled" | "declined">(null);
+  const [finished, setFinished] = useState<null | "signed" | "filled" | "declined" | "delegated">(null);
 
   useEffect(() => {
     signerApi<StartInfo>({ action: "start", token })
@@ -216,8 +217,10 @@ function Otp({ token, start, onSession }: { token: string; start: StartInfo; onS
   );
 }
 
-function Flow({ token, session, info, reload, onFinished }: { token: string; session: string; info: LoadInfo; reload: () => void; onFinished: (k: "signed" | "filled" | "declined") => void }) {
+function Flow({ token, session, info, reload, onFinished }: { token: string; session: string; info: LoadInfo; reload: () => void; onFinished: (k: "signed" | "filled" | "declined" | "delegated") => void }) {
   const [declining, setDeclining] = useState(false);
+  const [delegating, setDelegating] = useState(false);
+  const canDelegate = ["pending", "notified", "viewed"].includes(info.recipient.status) && info.document.status === "in_progress";
 
   const header = (
     <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
@@ -225,9 +228,14 @@ function Flow({ token, session, info, reload, onFinished }: { token: string; ses
         <p className="text-sm text-slate-500">De {info.document.sender}</p>
         <h1 className="text-xl font-semibold tracking-tight">{info.document.title}</h1>
       </div>
-      {info.step !== "done" && info.step !== "wait" && (
-        <button className="btn-ghost text-red-700" onClick={() => setDeclining(true)}>Rejeitar</button>
-      )}
+      <div className="flex gap-1">
+        {canDelegate && (
+          <button className="btn-ghost" onClick={() => setDelegating(true)} title="Passar a assinatura a outra pessoa">Delegar</button>
+        )}
+        {info.step !== "done" && info.step !== "wait" && (
+          <button className="btn-ghost text-red-700" onClick={() => setDeclining(true)}>Rejeitar</button>
+        )}
+      </div>
     </div>
   );
 
@@ -257,6 +265,7 @@ function Flow({ token, session, info, reload, onFinished }: { token: string; ses
         <FillAndSign token={token} session={session} info={info} onFinished={onFinished} />
       )}
       <DeclineModal open={declining} onClose={() => setDeclining(false)} token={token} session={session} onDone={() => onFinished("declined")} />
+      <DelegateModal open={delegating} onClose={() => setDelegating(false)} token={token} session={session} mode={info.document.mode} onDone={() => onFinished("delegated")} />
     </>
   );
 }
@@ -272,6 +281,8 @@ function FillAndSign({ token, session, info, onFinished }: { token: string; sess
     }
     return v;
   });
+  // Anexos carregados nesta sessão: id do campo -> nome do ficheiro (para mostrar).
+  const [fileNames, setFileNames] = useState<Record<string, string>>({});
   const [pad, setPad] = useState<SField | null>(null);
   const [agree, setAgree] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -341,7 +352,15 @@ function FillAndSign({ token, session, info, onFinished }: { token: string; sess
                   interactive={interactive && f.editable}
                   attention={attention === f.id}
                   heightPx={f.h * size.height}
+                  recipientName={info.recipient.name}
+                  fileName={fileNames[f.id]}
+                  token={token}
+                  session={session}
                   onChange={(v) => setValues((x) => ({ ...x, [f.id]: v }))}
+                  onFile={(path, name) => {
+                    setValues((x) => ({ ...x, [f.id]: path }));
+                    setFileNames((x) => ({ ...x, [f.id]: name }));
+                  }}
                   onSign={() => setPad(f)}
                 />
               ))}
@@ -390,17 +409,25 @@ function FillAndSign({ token, session, info, onFinished }: { token: string; sess
   );
 }
 
-function SignerField({ f, color, value, interactive, attention, heightPx, onChange, onSign }: {
-  f: SField; color: string; value: string | null; interactive: boolean; attention: boolean; heightPx: number; onChange: (v: string) => void; onSign: () => void;
+function SignerField({ f, color, value, interactive, attention, heightPx, recipientName, fileName, token, session, onChange, onFile, onSign }: {
+  f: SField; color: string; value: string | null; interactive: boolean; attention: boolean; heightPx: number;
+  recipientName: string; fileName?: string; token: string; session: string;
+  onChange: (v: string) => void; onFile: (path: string, name: string) => void; onSign: () => void;
 }) {
   const style: React.CSSProperties = { left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%` };
   const fs = Math.max(9, Math.min(15, heightPx * 0.6));
   const ring = attention ? "ring-4 ring-amber-300" : "";
   const empty = !value;
   if (!interactive) {
+    // Campos automáticos: mostra o que vai ficar escrito quando assinar.
+    const preview = !value && isAutoField(f.type)
+      ? f.type === "name" ? recipientName : f.type === "signed_date" ? new Date().toISOString().slice(0, 10) : null
+      : null;
     return (
-      <div className="absolute flex items-center justify-center overflow-hidden rounded-sm border border-dashed text-[10px]" style={{ ...style, borderColor: color, color, background: `${color}10` }}>
-        {value ? <FieldValue type={f.type} value={value} options={f.options} height={heightPx} /> : f.type === "signature" ? "Assinatura com Cartão de Cidadão" : FIELD_LABELS[f.type]}
+      <div className="absolute flex items-center justify-center overflow-hidden rounded-sm border border-dashed text-[10px]" style={{ ...style, borderColor: color, color, background: `${color}10` }} title={f.readonly ? "Valor fixo definido por quem enviou" : isAutoField(f.type) ? "Preenchido automaticamente" : undefined}>
+        {value || preview ? (
+          <FieldValue type={f.type} value={value ?? preview} options={f.options} height={heightPx} />
+        ) : f.type === "signature" ? "Assinatura com Cartão de Cidadão" : f.type === "email" ? "O seu email" : FIELD_LABELS[f.type]}
       </div>
     );
   }
@@ -438,6 +465,8 @@ function SignerField({ f, color, value, interactive, attention, heightPx, onChan
           {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
       );
+    case "attachment":
+      return <AttachmentField f={f} box={box} style={{ ...style, borderColor: color, background: bg, color }} fs={fs} fileName={fileName ?? (value ? "Ficheiro carregado" : undefined)} token={token} session={session} onFile={onFile} />;
     case "date":
       return <input data-field={f.id} type="date" className={`${box} bg-white px-1`} style={{ ...style, borderColor: color, fontSize: fs }} value={value ?? ""} onChange={(e) => onChange(e.target.value)} aria-label={f.label ?? "Data"} />;
     default:
@@ -454,6 +483,88 @@ function SignerField({ f, color, value, interactive, attention, heightPx, onChan
         />
       );
   }
+}
+
+function AttachmentField({ f, box, style, fs, fileName, token, session, onFile }: {
+  f: SField; box: string; style: React.CSSProperties; fs: number; fileName?: string; token: string; session: string; onFile: (path: string, name: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function pick(file: File | undefined) {
+    if (!file) return;
+    setError(null);
+    if (file.size > 10 * 1024 * 1024) return setError("O ficheiro tem mais de 10 MB.");
+    if (!/\.(pdf|jpe?g|png)$/i.test(file.name)) return setError("Escolha um PDF ou uma imagem (JPG ou PNG).");
+    setBusy(true);
+    try {
+      const u = await signerApi<{ path: string; uploadToken: string }>({ action: "attachment-upload-url", token, session, field_id: f.id, file_name: file.name });
+      const up = await anon.storage.from(BUCKET).uploadToSignedUrl(u.path, u.uploadToken, file, { contentType: file.type || "application/octet-stream" });
+      if (up.error) throw up.error;
+      onFile(u.path, file.name);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <label data-field={f.id} className={`${box} flex cursor-pointer items-center justify-center gap-1 px-1`} style={style} title={error ?? f.label ?? "Anexo"}>
+      <input type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" className="sr-only" onChange={(e) => pick(e.target.files?.[0])} disabled={busy} />
+      <span className="truncate font-semibold" style={{ fontSize: Math.min(fs, 12), color: error ? "#b91c1c" : undefined }}>
+        {busy ? "A carregar…" : error ? `⚠ ${error}` : fileName ? `📎 ${fileName}` : `📎 ${f.label || "Anexar ficheiro"}${f.required ? " *" : ""}`}
+      </span>
+    </label>
+  );
+}
+
+function DelegateModal({ open, onClose, token, session, mode, onDone }: { open: boolean; onClose: () => void; token: string; session: string; mode: "simple" | "qualified"; onDone: () => void }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <Modal open={open} onClose={onClose} title="Delegar a assinatura">
+      <form
+        className="space-y-3"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setError(null);
+          try {
+            await signerApi({ action: "delegate", token, session, name, email, reason });
+            onDone();
+          } catch (err) {
+            setError(errorMessage(err));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <p className="text-sm text-slate-600">
+          A outra pessoa recebe um convite por email e passa a assinar no seu lugar. O seu link deixa de funcionar e quem enviou o documento é avisado.
+          {mode === "qualified" && " Como é uma assinatura com Cartão de Cidadão, indique o nome tal como está no cartão dessa pessoa."}
+        </p>
+        <div>
+          <label className="label" htmlFor="dname">Nome completo</label>
+          <input id="dname" className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={200} required />
+        </div>
+        <div>
+          <label className="label" htmlFor="demail">Email</label>
+          <input id="demail" type="email" className="input" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        </div>
+        <div>
+          <label className="label" htmlFor="dreason">Motivo (opcional)</label>
+          <textarea id="dreason" className="input min-h-20" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} placeholder="Ex.: estou de férias; quem assina é o subdiretor." />
+        </div>
+        {error && <Alert>{error}</Alert>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-secondary" onClick={onClose}>Voltar</button>
+          <button className="btn-primary" disabled={busy || !name.trim() || !email.trim()}>{busy && <Spinner className="h-4 w-4 text-white" />} Delegar</button>
+        </div>
+      </form>
+    </Modal>
+  );
 }
 
 function CcWizard({ token, session, info, onDone, onFinished }: { token: string; session: string; info: LoadInfo; onDone: (completed: boolean) => void; onFinished: (k: "signed") => void }) {
@@ -586,19 +697,20 @@ function DeclineModal({ open, onClose, token, session, onDone }: { open: boolean
   );
 }
 
-function Done({ kind, title }: { kind: "signed" | "filled" | "declined"; title: string }) {
+function Done({ kind, title }: { kind: "signed" | "filled" | "declined" | "delegated"; title: string }) {
   return (
     <div className="mx-auto mt-10 max-w-md text-center">
       <div className={`mx-auto flex h-14 w-14 items-center justify-center rounded-full ${kind === "declined" ? "bg-slate-200 text-slate-600" : "bg-emerald-100 text-emerald-700"}`}>
-        {kind === "declined" ? "✕" : <CheckIcon className="h-7 w-7" />}
+        {kind === "declined" ? "✕" : kind === "delegated" ? "→" : <CheckIcon className="h-7 w-7" />}
       </div>
       <h1 className="mt-4 text-xl font-semibold">
-        {kind === "signed" ? "Documento assinado" : kind === "filled" ? "Dados submetidos" : "Documento rejeitado"}
+        {kind === "signed" ? "Documento assinado" : kind === "filled" ? "Dados submetidos" : kind === "delegated" ? "Assinatura delegada" : "Documento rejeitado"}
       </h1>
       <p className="muted mt-2">
         {kind === "signed" && `Obrigado. Quando todos assinarem «${title}», recebe uma cópia final por email.`}
         {kind === "filled" && "Obrigado. Vai receber um email quando chegar a sua vez de assinar com o Cartão de Cidadão."}
         {kind === "declined" && "O remetente foi avisado."}
+        {kind === "delegated" && "A outra pessoa recebeu o convite por email e o remetente foi avisado."}
       </p>
       <p className="mt-6 text-xs text-slate-400">Pode fechar esta página.</p>
     </div>

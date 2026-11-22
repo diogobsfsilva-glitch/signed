@@ -12,9 +12,9 @@ O plano completo, com as fases seguintes, está em [docs/PLANO.md](docs/PLANO.md
 | Área | Funcionalidades |
 |---|---|
 | Documentos | Carregar PDF ou Word (o Word é convertido pelo Microsoft 365), pastas, espaços de trabalho (por hotel ou departamento), pesquisa e filtros |
-| Editor | Destinatários (assina ou recebe cópia), ordem de assinatura, campos de assinatura, iniciais, texto, data, caixa de seleção, opção única e lista, arrastar e redimensionar |
-| Envio | Assunto e mensagem, prazo, lembretes automáticos, envio sequencial ou em paralelo |
-| Signatário | Link seguro e código por email, preenchimento guiado, assinatura (desenhar, escrever, imagem), rejeitar com motivo, funciona no telemóvel |
+| Editor | Destinatários (assina ou recebe cópia), ordem de assinatura, campos de assinatura, iniciais, texto, data, caixa de seleção, opção única, lista e anexo; campos automáticos (nome, email, data de assinatura); valores pré-preenchidos pelo remetente, opcionalmente fixos; arrastar e redimensionar |
+| Envio | Assunto e mensagem, prazo, lembretes automáticos, envio sequencial ou em paralelo, corrigir nome, email ou prazo depois de enviar (o link antigo deixa de valer), envio em massa a partir de um modelo e de um CSV |
+| Signatário | Link seguro e código por email, preenchimento guiado, assinatura (desenhar, escrever, imagem), anexos (PDF ou imagem, até 10 MB), delegar a outra pessoa, rejeitar com motivo, funciona no telemóvel |
 | Cartão de Cidadão | Preenchimento na web, depois descarregar, assinar na app Autenticação.gov e carregar. Validação da cadeia ECRaizEstado, da integridade e da identidade (nome ou nº de identificação civil) |
 | Prova | Registo de auditoria encadeado por hashes (inalterável), certificado de conclusão em PDF, selo PAdES da plataforma, SHA-256 do original e do final |
 | Conclusão | Email a todos com o PDF final e o certificado, arquivo automático no SharePoint |

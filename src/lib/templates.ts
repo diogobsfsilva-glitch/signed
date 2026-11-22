@@ -21,6 +21,8 @@ export async function instantiate(opts: {
   workspaceId?: string;
   folderId?: string | null;
   recipients?: RecipientOverride[];
+  /** Lote do envio em massa */
+  batchId?: string | null;
 }): Promise<string> {
   const { data, error } = await supabase.rpc("instantiate_document", {
     p_source: opts.sourceId,
@@ -29,6 +31,7 @@ export async function instantiate(opts: {
     p_workspace: opts.workspaceId ?? null,
     p_folder: opts.folderId ?? null,
     p_recipients: opts.recipients ?? [],
+    p_batch: opts.batchId ?? null,
   });
   if (error) throw error;
   const row = (Array.isArray(data) ? data[0] : data) as { new_document_id: string; new_original_path: string } | null;

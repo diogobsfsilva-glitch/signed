@@ -3,7 +3,7 @@
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { DocumentRow, FieldRow, RecipientRow } from "./types.ts";
-import { isFillField } from "./types.ts";
+import { autoFieldValue, isAutoField, parseAttachment } from "./types.ts";
 import { allSigned, currentRecipients, fillPhaseDone } from "./workflow.ts";
 import { flattenFields } from "./pdf.ts";
 import { loadSealKey, type SealKey, sealPdf } from "./pades-sign.ts";
@@ -47,8 +47,11 @@ async function hmacKey(): Promise<CryptoKey> {
   return crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
 }
 
-export async function signerToken(recipientId: string): Promise<string> {
-  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", await hmacKey(), new TextEncoder().encode(`signer:${recipientId}`)));
+/** A versão muda quando o destinatário é corrigido ou delega; a versão 0 mantém o formato original. */
+export async function signerToken(r: { id: string; token_version?: number | null }): Promise<string> {
+  const v = r.token_version ?? 0;
+  const msg = v ? `signer:${r.id}:${v}` : `signer:${r.id}`;
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", await hmacKey(), new TextEncoder().encode(msg)));
   return toBase64(sig).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
@@ -56,8 +59,52 @@ export function tokenHash(token: string): Promise<string> {
   return sha256Hex(`signed-token:${token}`);
 }
 
-export async function signerUrl(recipientId: string): Promise<string> {
-  return `${appUrl()}/s/${await signerToken(recipientId)}`;
+export async function signerUrl(r: { id: string; token_version?: number | null }): Promise<string> {
+  return `${appUrl()}/s/${await signerToken(r)}`;
+}
+
+/** Estados em que um destinatário ainda pode ser corrigido ou delegar (ainda não agiu). */
+export const REASSIGNABLE = ["pending", "notified", "viewed"];
+
+/**
+ * Troca a pessoa de um destinatário (correção pelo remetente ou delegação pelo signatário).
+ * Se o email mudar, o link anterior, as sessões e os códigos deixam de valer e o convite é
+ * reenviado a seguir por advance(). Os campos continuam atribuídos ao mesmo destinatário.
+ */
+export async function reassignRecipient(
+  sb: SupabaseClient,
+  r: RecipientRow,
+  next: { name: string; email: string; civil_id: string | null },
+): Promise<{ emailChanged: boolean }> {
+  const email = next.email.trim().toLowerCase();
+  const emailChanged = email !== r.email.toLowerCase();
+  const patch: Record<string, unknown> = { name: next.name.trim(), email, civil_id: next.civil_id };
+  if (emailChanged) {
+    const version = (r.token_version ?? 0) + 1;
+    Object.assign(patch, {
+      token_version: version,
+      token_hash: r.role === "signer" ? await tokenHash(await signerToken({ id: r.id, token_version: version })) : null,
+      status: "pending",
+      notified_at: null,
+      notified_phase: null,
+      reminded_at: null,
+      viewed_at: null,
+    });
+  }
+  const { error } = await sb.from("recipients").update(patch).eq("id", r.id);
+  if (error) throw new Error(error.message);
+  if (emailChanged) {
+    await sb.from("signer_sessions").delete().eq("recipient_id", r.id);
+    await sb.from("signer_otps").delete().eq("recipient_id", r.id);
+  }
+  return { emailChanged };
+}
+
+/** Preenche os campos automáticos (nome, email, data de assinatura) de um signatário. */
+export async function fillAutoFields(sb: SupabaseClient, b: Bundle, r: Pick<RecipientRow, "id" | "name" | "email">, now = new Date()) {
+  for (const f of b.fields.filter((x) => x.recipient_id === r.id && isAutoField(x.type))) {
+    await sb.from("fields").update({ value: autoFieldValue(f.type, r, now), filled_at: now.toISOString() }).eq("id", f.id);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -186,7 +233,7 @@ async function notifyCurrent(sb: SupabaseClient, b: Bundle) {
       senderName: ownerName(b),
       title: b.doc.title,
       message: b.doc.message,
-      url: await signerUrl(r.id),
+      url: await signerUrl(r),
       mode: b.doc.signature_mode,
       step,
       expiresAt: b.doc.expires_at,
@@ -211,7 +258,7 @@ export async function remind(sb: SupabaseClient, b: Bundle, r: RecipientRow): Pr
     senderName: ownerName(b),
     title: b.doc.title,
     message: b.doc.message,
-    url: await signerUrl(r.id),
+    url: await signerUrl(r),
     mode: b.doc.signature_mode,
     step,
     expiresAt: b.doc.expires_at,
@@ -224,8 +271,12 @@ export async function remind(sb: SupabaseClient, b: Bundle, r: RecipientRow): Pr
 
 /** Modo CC: grava os valores preenchidos no PDF e cria a versão a assinar. */
 async function prepareQualified(sb: SupabaseClient, b: Bundle) {
+  // Campos automáticos ficam com os dados do signatário e a data de preparação.
+  const now = new Date();
+  for (const r of b.recipients.filter((x) => x.role === "signer")) await fillAutoFields(sb, b, r, now);
+  const { data: fresh } = await sb.from("fields").select("*").eq("document_id", b.doc.id);
+  const fillFields = (fresh ?? b.fields).filter((f) => f.type !== "initials");
   const original = await download(sb, b.doc.original_path!);
-  const fillFields = b.fields.filter((f) => isFillField(f.type, "qualified") || f.type === "signature");
   const prepared = await flattenFields(original, fillFields, {
     mode: "qualified",
     qualifiedPlaceholders: true,
@@ -297,6 +348,7 @@ async function finalize(sb: SupabaseClient, b: Bundle) {
     recipients: b.recipients,
     events: events ?? [],
     chainIntact: intact === true,
+    attachments: attachmentsOf(b).map((a) => ({ recipient: a.recipient, name: a.file.name, size: a.file.size, sha256: a.file.sha256 })),
   });
   if (key) cert = await sealPdf(cert, key, { reason: "Certificado de conclusão", name: "Signed - Altis Hotels" });
   const auditPath = `${docFolder(doc)}/certificado.pdf`;
@@ -338,10 +390,27 @@ async function finalize(sb: SupabaseClient, b: Bundle) {
     await deliver(sb, { to: email, subject: mail.subject, html: mail.html, kind: "completed", documentId: doc.id, attachments });
   }
 
-  await archive(sb, { ...doc, title: doc.title }, [
+  const archived = [
     { name: finalName, bytes: finalBytes },
     { name: certName, bytes: cert },
-  ]);
+  ];
+  for (const [i, a] of attachmentsOf(b).entries()) {
+    try {
+      archived.push({ name: `Anexos/${i + 1}_${safeFileName(a.recipient)}_${a.file.name}`, bytes: await download(sb, a.file.path) });
+    } catch (e) {
+      console.error(`anexo em falta: ${a.file.path}`, e);
+    }
+  }
+  await archive(sb, { ...doc, title: doc.title }, archived);
+}
+
+/** Anexos carregados pelos signatários (para o certificado e o arquivo). */
+export function attachmentsOf(b: Bundle) {
+  const names = new Map(b.recipients.map((r) => [r.id, r.name]));
+  return b.fields
+    .filter((f) => f.type === "attachment")
+    .map((f) => ({ recipient: names.get(f.recipient_id) ?? "", label: f.label, file: parseAttachment(f.value) }))
+    .filter((a): a is { recipient: string; label: string | null; file: NonNullable<ReturnType<typeof parseAttachment>> } => !!a.file);
 }
 
 async function archive(sb: SupabaseClient, doc: DocumentRow, files: { name: string; bytes: Uint8Array }[]) {

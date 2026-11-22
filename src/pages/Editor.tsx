@@ -4,7 +4,7 @@ import { supabase, BUCKET } from "../lib/supabase";
 import { documentAction } from "../lib/api";
 import { instantiate } from "../lib/templates";
 import type { DocumentRow, FieldRow, FieldType, RecipientRow } from "../../supabase/functions/_shared/types";
-import { FIELD_LABELS } from "../../supabase/functions/_shared/types";
+import { AUTO_FIELD_TYPES, FIELD_LABELS, isAutoField, isPrefillable } from "../../supabase/functions/_shared/types";
 import { validateForSend } from "../../supabase/functions/_shared/workflow";
 import { PdfPages } from "../components/PdfPages";
 import { DEFAULT_SIZE, fieldIcon } from "../components/FieldBox";
@@ -12,7 +12,7 @@ import { Alert, ArrowDown, ArrowUp, FullPageSpinner, IdIcon, Modal, PlusIcon, Sp
 import { errorMessage, RECIPIENT_COLORS } from "../lib/format";
 
 type R = Pick<RecipientRow, "id" | "name" | "email" | "role" | "signing_order" | "civil_id" | "color" | "status">;
-type F = Pick<FieldRow, "id" | "recipient_id" | "type" | "page" | "x" | "y" | "w" | "h" | "required" | "label" | "options" | "group_name">;
+type F = Pick<FieldRow, "id" | "recipient_id" | "type" | "page" | "x" | "y" | "w" | "h" | "required" | "label" | "options" | "group_name" | "value"> & { readonly: boolean };
 type Tab = "recipients" | "fields" | "settings";
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
@@ -51,7 +51,7 @@ export function Editor() {
       if (d.status !== "draft") return nav(`/documentos/${d.id}`, { replace: true });
       const [{ data: r }, { data: f }, { data: url }] = await Promise.all([
         supabase.from("recipients").select("id, name, email, role, signing_order, civil_id, color, status").eq("document_id", d.id).order("signing_order").order("created_at"),
-        supabase.from("fields").select("id, recipient_id, type, page, x, y, w, h, required, label, options, group_name").eq("document_id", d.id),
+        supabase.from("fields").select("id, recipient_id, type, page, x, y, w, h, required, label, options, group_name, value, readonly").eq("document_id", d.id),
         supabase.storage.from(BUCKET).createSignedUrl(d.original_path, 3600),
       ]);
       setDoc(d);
@@ -139,10 +139,12 @@ export function Editor() {
       y: clamp(y - h / 2, 0, 1 - h),
       w,
       h,
-      required: placing !== "checkbox",
+      required: placing !== "checkbox" && !isAutoField(placing),
       label: null,
       options: placing === "radio" || placing === "dropdown" ? ["Opção 1", "Opção 2"] : null,
       group_name: null,
+      value: null,
+      readonly: false,
     };
     setFields((x) => [...x, f]);
     setSelected(f.id);
@@ -234,8 +236,18 @@ export function Editor() {
 
   const issues = validateForSend(doc, recipients, fields.map((f) => ({ ...f })));
   const palette: FieldType[] = doc.signature_mode === "qualified"
-    ? ["signature", "text", "date", "checkbox", "radio", "dropdown"]
-    : ["signature", "initials", "text", "date", "checkbox", "radio", "dropdown"];
+    ? ["signature", "text", "date", "checkbox", "radio", "dropdown", "attachment"]
+    : ["signature", "initials", "text", "date", "checkbox", "radio", "dropdown", "attachment"];
+  const paletteButton = (t: FieldType) => (
+    <button
+      key={t}
+      onClick={() => setPlacing(placing === t ? null : t)}
+      className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-sm ${placing === t ? "border-navy-600 bg-navy-900 text-white" : "border-slate-200 bg-white hover:bg-slate-50"}`}
+    >
+      <span className="w-5 text-center text-xs">{fieldIcon(t)}</span>
+      {t === "signature" && doc.signature_mode === "qualified" ? "Assinatura CC" : FIELD_LABELS[t]}
+    </button>
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -324,18 +336,9 @@ export function Editor() {
                     <div>
                       <label className="label">Adicionar campo</label>
                       <p className="mb-2 text-xs text-slate-500">Escolha o tipo e clique no documento onde o quer colocar.</p>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {palette.map((t) => (
-                          <button
-                            key={t}
-                            onClick={() => setPlacing(placing === t ? null : t)}
-                            className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-sm ${placing === t ? "border-navy-600 bg-navy-900 text-white" : "border-slate-200 bg-white hover:bg-slate-50"}`}
-                          >
-                            <span className="w-5 text-center text-xs">{fieldIcon(t)}</span>
-                            {t === "signature" && doc.signature_mode === "qualified" ? "Assinatura CC" : FIELD_LABELS[t]}
-                          </button>
-                        ))}
-                      </div>
+                      <div className="grid grid-cols-2 gap-1.5">{palette.map(paletteButton)}</div>
+                      <p className="mt-3 mb-1.5 text-xs font-medium text-slate-500">Preenchidos automaticamente</p>
+                      <div className="grid grid-cols-2 gap-1.5">{AUTO_FIELD_TYPES.map(paletteButton)}</div>
                       {doc.signature_mode === "qualified" && (
                         <p className="mt-2 text-xs text-slate-500">No modo Cartão de Cidadão, o campo de assinatura indica onde o signatário deve colocar a assinatura na app Autenticação.gov.</p>
                       )}
@@ -395,7 +398,9 @@ export function Editor() {
                       >
                         <span className="truncate px-1">
                           {fieldIcon(f.type)} {f.label || (f.type === "signature" && doc.signature_mode === "qualified" ? "Assinatura CC" : FIELD_LABELS[f.type])}
-                          {f.required && f.type !== "checkbox" ? " *" : ""}
+                          {f.required && f.type !== "checkbox" && !isAutoField(f.type) && !f.readonly ? " *" : ""}
+                          {f.value ? <span className="font-normal text-slate-700"> = {f.type === "checkbox" ? (f.value === "true" ? "✓" : "—") : f.value}</span> : null}
+                          {f.readonly ? " 🔒" : ""}
                         </span>
                         <span
                           className="absolute right-0 bottom-0 h-2.5 w-2.5 cursor-se-resize opacity-0 group-hover:opacity-100"
@@ -540,11 +545,21 @@ function FieldProps({ field, signers, qualified, onChange, onDelete }: { field: 
           {signers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </div>
-      {field.type !== "signature" && field.type !== "initials" && (
+      {isAutoField(field.type) && (
+        <p className="rounded-md bg-slate-50 p-2 text-xs text-slate-600">
+          {field.type === "signed_date"
+            ? "Fica com a data em que a pessoa assina (no modo Cartão de Cidadão, a data em que o PDF é preparado para assinar)."
+            : `Fica com o ${field.type === "name" ? "nome" : "email"} do signatário, tal como está no documento.`}
+        </p>
+      )}
+      {field.type !== "signature" && field.type !== "initials" && !isAutoField(field.type) && (
         <div>
           <label className="label text-xs">Nome do campo</label>
-          <input className="input" value={field.label ?? ""} maxLength={80} placeholder="Ex.: NIF, Cargo, Morada" onChange={(e) => onChange({ label: e.target.value || null })} />
+          <input className="input" value={field.label ?? ""} maxLength={80} placeholder={field.type === "attachment" ? "Ex.: Cópia do documento de identificação" : "Ex.: NIF, Cargo, Morada"} onChange={(e) => onChange({ label: e.target.value || null })} />
         </div>
+      )}
+      {field.type === "attachment" && (
+        <p className="text-xs text-slate-500">O signatário carrega um PDF ou uma imagem (até 10 MB). O ficheiro fica junto do documento e é arquivado com ele.</p>
       )}
       {(field.type === "radio" || field.type === "dropdown") && (
         <div>
@@ -556,13 +571,55 @@ function FieldProps({ field, signers, qualified, onChange, onDelete }: { field: 
           />
         </div>
       )}
-      {field.type !== "signature" && (
+      {isPrefillable(field.type) && <PrefillEditor field={field} onChange={onChange} />}
+      {field.type !== "signature" && !isAutoField(field.type) && !field.readonly && (
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={field.required} onChange={(e) => onChange({ required: e.target.checked }, true)} />
           Obrigatório
         </label>
       )}
       <p className="text-xs text-slate-400">Arraste para mover; use o canto inferior direito para redimensionar. Tecla Delete apaga.</p>
+    </div>
+  );
+}
+
+/** Valor que o remetente preenche antes de enviar (opcionalmente fixo). */
+function PrefillEditor({ field, onChange }: { field: F; onChange: (p: Partial<F>, now?: boolean) => void }) {
+  const set = (v: string, now = true) => onChange({ value: v === "" ? null : v }, now);
+  let input: React.ReactNode;
+  switch (field.type) {
+    case "date":
+      input = <input type="date" className="input" value={field.value ?? ""} onChange={(e) => set(e.target.value)} />;
+      break;
+    case "checkbox":
+      input = (
+        <select className="input" value={field.value ?? ""} onChange={(e) => set(e.target.value)}>
+          <option value="">Sem valor</option>
+          <option value="true">Marcada</option>
+          <option value="false">Não marcada</option>
+        </select>
+      );
+      break;
+    case "radio":
+    case "dropdown":
+      input = (
+        <select className="input" value={field.value ?? ""} onChange={(e) => set(e.target.value)}>
+          <option value="">Sem valor</option>
+          {(field.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      );
+      break;
+    default:
+      input = <input className="input" value={field.value ?? ""} maxLength={500} placeholder="Deixe vazio para o signatário preencher" onChange={(e) => set(e.target.value, false)} />;
+  }
+  return (
+    <div className="space-y-2 rounded-md bg-slate-50 p-2">
+      <label className="label text-xs">Valor pré-preenchido (opcional)</label>
+      {input}
+      <label className="flex items-start gap-2 text-xs text-slate-600">
+        <input type="checkbox" className="mt-0.5" checked={field.readonly} onChange={(e) => onChange({ readonly: e.target.checked }, true)} />
+        <span>Fixo: o signatário vê o valor mas não o pode alterar (ex.: vencimento, hotel, função).</span>
+      </label>
     </div>
   );
 }
