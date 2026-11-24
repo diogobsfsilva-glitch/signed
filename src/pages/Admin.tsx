@@ -223,16 +223,18 @@ function Users() {
 }
 
 function Settings() {
-  const [s, setS] = useState<{ org_name: string; allowed_domains: string[]; admin_emails: string[] } | null>(null);
+  const [s, setS] = useState<{ org_name: string; allowed_domains: string[]; admin_emails: string[]; test_mode: boolean; allowed_emails: string[] } | null>(null);
   const [domains, setDomains] = useState("");
   const [admins, setAdmins] = useState("");
+  const [extra, setExtra] = useState("");
   const [saved, setSaved] = useState(false);
   useEffect(() => {
-    supabase.from("app_settings").select("org_name, allowed_domains, admin_emails").single().then(({ data }) => {
+    supabase.from("app_settings").select("org_name, allowed_domains, admin_emails, test_mode, allowed_emails").single().then(({ data }) => {
       if (!data) return;
       setS(data);
       setDomains(data.allowed_domains.join("\n"));
       setAdmins(data.admin_emails.join("\n"));
+      setExtra(data.allowed_emails.join("\n"));
     });
   }, []);
   if (!s) return <FullPageSpinner />;
@@ -244,7 +246,10 @@ function Settings() {
         e.preventDefault();
         const d = split(domains);
         if (!d.length) return toast("Indique pelo menos um domínio.", "error");
-        const { error } = await supabase.from("app_settings").update({ org_name: s.org_name, allowed_domains: d, admin_emails: split(admins), updated_at: new Date().toISOString() }).eq("id", 1);
+        const { error } = await supabase
+          .from("app_settings")
+          .update({ org_name: s.org_name, allowed_domains: d, admin_emails: split(admins), allowed_emails: split(extra), test_mode: s.test_mode, updated_at: new Date().toISOString() })
+          .eq("id", 1);
         if (error) toast(errorMessage(error), "error");
         else setSaved(true);
       }}
@@ -263,6 +268,18 @@ function Settings() {
         <textarea id="adm" className="input min-h-20" value={admins} onChange={(e) => setAdmins(e.target.value)} placeholder="nome@altishotels.com" />
         <p className="mt-1 text-xs text-slate-500">Estes emails ficam administradores no primeiro login.</p>
       </div>
+      <div>
+        <label className="label" htmlFor="extra">Emails autorizados individualmente</label>
+        <textarea id="extra" className="input min-h-16" value={extra} onChange={(e) => setExtra(e.target.value)} placeholder="Ex.: consultor@outraempresa.pt" />
+        <p className="mt-1 text-xs text-slate-500">Pessoas de fora dos domínios acima que podem entrar. Deixe vazio em produção.</p>
+      </div>
+      <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+        <input type="checkbox" className="mt-0.5" checked={s.test_mode} onChange={(e) => setS({ ...s, test_mode: e.target.checked })} />
+        <span>
+          <span className="font-medium">Modo de teste</span>
+          <span className="block text-xs text-slate-600">Mostra o login com email e palavra-passe e, sem Microsoft 365, o texto dos emails no detalhe de cada documento. Desligue depois de o login com Microsoft estar a funcionar.</span>
+        </span>
+      </label>
       {saved && <Alert kind="success">Definições guardadas.</Alert>}
       <button className="btn-primary">Guardar</button>
       <M365Check />
