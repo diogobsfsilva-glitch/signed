@@ -38,6 +38,8 @@ export interface DocumentRow {
   original_sha256: string | null;
   page_count: number | null;
   pages: PageInfo[] | null;
+  /** Pacote de documentos: partes por ordem (null = um só documento). */
+  parts?: DocPart[] | null;
   prepared_path: string | null;
   prepared_sha256: string | null;
   current_path: string | null;
@@ -51,6 +53,37 @@ export interface DocumentRow {
   updated_at: string;
   sent_at: string | null;
   completed_at: string | null;
+}
+
+/** Um documento dentro de um pacote: nome e número de páginas (as partes são contíguas, pela ordem). */
+export interface DocPart {
+  name: string;
+  pages: number;
+}
+
+export const MAX_PARTS = 30;
+
+/** Páginas (1-based, inclusive) de cada parte. */
+export function partRanges(parts: DocPart[]): { name: string; from: number; to: number }[] {
+  let next = 1;
+  return parts.map((p) => {
+    const r = { name: p.name, from: next, to: next + p.pages - 1 };
+    next += p.pages;
+    return r;
+  });
+}
+
+/** Problemas na lista de partes, comparada com o número de páginas do PDF. */
+export function partsProblem(parts: DocPart[] | null | undefined, pageCount: number | null | undefined): string | null {
+  if (!parts) return null;
+  if (!Array.isArray(parts) || parts.length < 1 || parts.length > MAX_PARTS) return `Um pacote tem de ter entre 1 e ${MAX_PARTS} documentos.`;
+  for (const p of parts) {
+    if (typeof p?.name !== "string" || !p.name.trim() || p.name.length > 150) return "Todos os documentos do pacote precisam de um nome (até 150 caracteres).";
+    if (!Number.isInteger(p.pages) || p.pages < 1) return "Há um documento do pacote sem páginas.";
+  }
+  const total = parts.reduce((a, p) => a + p.pages, 0);
+  if (pageCount != null && total !== pageCount) return "A lista de documentos do pacote não corresponde ao PDF. Volte a carregar os documentos.";
+  return null;
 }
 
 export interface PageInfo {

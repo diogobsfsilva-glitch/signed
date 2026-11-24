@@ -3,8 +3,10 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { supabase, BUCKET } from "../lib/supabase";
 import { documentAction } from "../lib/api";
 import { instantiate } from "../lib/templates";
-import type { DocumentRow, FieldRow, FieldType, RecipientRow } from "../../supabase/functions/_shared/types";
-import { AUTO_FIELD_TYPES, FIELD_LABELS, isAutoField, isPrefillable } from "../../supabase/functions/_shared/types";
+import { baseName, buildPackage, fileKind, fileToPdf, MAX_FILE, type PartSource } from "../lib/package";
+import { openPdf, pageSizes } from "../lib/pdf";
+import type { DocPart, DocumentRow, FieldRow, FieldType, RecipientRow } from "../../supabase/functions/_shared/types";
+import { AUTO_FIELD_TYPES, FIELD_LABELS, isAutoField, isPrefillable, MAX_PARTS, partRanges } from "../../supabase/functions/_shared/types";
 import { validateForSend } from "../../supabase/functions/_shared/workflow";
 import { PdfPages } from "../components/PdfPages";
 import { DEFAULT_SIZE, fieldIcon } from "../components/FieldBox";
@@ -33,6 +35,7 @@ export function Editor() {
   const [saving, setSaving] = useState(0);
   const [review, setReview] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const [restructuring, setRestructuring] = useState<string | null>(null);
 
   const track = useCallback(async <T,>(p: PromiseLike<{ error: unknown } & T>): Promise<T & { error: unknown }> => {
     setSaving((n) => n + 1);
@@ -238,6 +241,66 @@ export function Editor() {
     }
   }
 
+  // ------------------------------------------------------------------ pacote de documentos
+  const currentParts: DocPart[] = doc.parts?.length ? doc.parts : [{ name: doc.title, pages: doc.page_count ?? doc.pages?.length ?? 1 }];
+
+  /** Reconstrói o PDF com as partes pela nova ordem (e ficheiros novos no fim), mudando a página dos campos. */
+  async function restructure(sources: PartSource[], label: string) {
+    if (!sources.length) return toast("O documento tem de ter pelo menos um ficheiro.", "error");
+    const keep = new Set(sources.flatMap((s) => (s.kind === "old" ? [s.index] : [])));
+    const ranges = partRanges(currentParts);
+    const lost = fields.filter((f) => ranges.some((r, i) => !keep.has(i) && f.page >= r.from && f.page <= r.to));
+    if (lost.length && !confirm(`Os ${lost.length} campos colocados nos documentos retirados vão ser apagados. Continuar?`)) return;
+    setRestructuring(label);
+    try {
+      const dl = await supabase.storage.from(BUCKET).download(doc!.original_path!);
+      if (dl.error) throw dl.error;
+      const pkg = await buildPackage(new Uint8Array(await dl.data.arrayBuffer()), currentParts, sources);
+      const pages = await pageSizes(await openPdf(pkg.bytes.slice()));
+      const up = await supabase.storage.from(BUCKET).upload(doc!.original_path!, new Blob([pkg.bytes], { type: "application/pdf" }), { contentType: "application/pdf", upsert: true });
+      if (up.error) throw up.error;
+      const parts = pkg.parts.length > 1 ? pkg.parts : null;
+      const patch = { parts, page_count: pages.length, pages };
+      const { error } = await supabase.from("documents").update(patch).eq("id", doc!.id);
+      if (error) throw error;
+      const moved = fields.filter((f) => !lost.includes(f) && pkg.pageMap.get(f.page) !== f.page);
+      if (lost.length) await track(supabase.from("fields").delete().in("id", lost.map((f) => f.id)));
+      await Promise.all(moved.map((f) => track(supabase.from("fields").update({ page: pkg.pageMap.get(f.page)! }).eq("id", f.id))));
+      setFields((x) => x.filter((f) => !lost.includes(f)).map((f) => ({ ...f, page: pkg.pageMap.get(f.page) ?? f.page })));
+      setDoc((d) => (d ? { ...d, ...patch } : d));
+      setSelected(null);
+      const { data: url } = await supabase.storage.from(BUCKET).createSignedUrl(doc!.original_path!, 3600);
+      setPdfUrl(url?.signedUrl ? `${url.signedUrl}&v=${Date.now()}` : null);
+    } catch (e) {
+      toast(errorMessage(e), "error");
+    } finally {
+      setRestructuring(null);
+    }
+  }
+
+  async function addParts(files: File[]) {
+    const bad = files.find((f) => !fileKind(f));
+    if (bad) return toast(`"${bad.name}": escolha ficheiros PDF ou Word (.docx).`, "error");
+    const big = files.find((f) => f.size > MAX_FILE);
+    if (big) return toast(`"${big.name}" tem mais de 25 MB.`, "error");
+    if (currentParts.length + files.length > MAX_PARTS) return toast(`Um pacote pode ter até ${MAX_PARTS} documentos.`, "error");
+    const added: PartSource[] = [];
+    setRestructuring("A preparar os ficheiros…");
+    try {
+      for (const f of files) added.push({ kind: "new", name: baseName(f), bytes: await fileToPdf(doc!.id, `${doc!.workspace_id}/${doc!.id}`, f) });
+    } catch (e) {
+      setRestructuring(null);
+      return toast(errorMessage(e), "error");
+    }
+    await restructure([...currentParts.map((p, i) => ({ kind: "old" as const, index: i, name: p.name })), ...added], "A juntar os documentos…");
+  }
+
+  function renamePart(i: number, name: string) {
+    const n = name.trim().slice(0, 150);
+    if (!n || !doc!.parts || n === doc!.parts[i]?.name) return;
+    patchDoc({ parts: doc!.parts.map((p, k) => (k === i ? { ...p, name: n } : p)) });
+  }
+
   const issues = validateForSend(doc, recipients, fields.map((f) => ({ ...f })));
   const palette: FieldType[] = doc.signature_mode === "qualified"
     ? ["signature", "text", "date", "checkbox", "radio", "dropdown", "attachment"]
@@ -354,7 +417,27 @@ export function Editor() {
                 )}
               </div>
             )}
-            {tab === "settings" && <SettingsPanel doc={doc} onPatch={patchDoc} hasInitials={fields.some((f) => f.type === "initials")} />}
+            {tab === "settings" && (
+              <div className="space-y-6">
+                <PackagePanel
+                  parts={currentParts}
+                  isPackage={!!doc.parts && doc.parts.length > 1}
+                  busy={restructuring}
+                  fieldsPerPart={partRanges(currentParts).map((r) => fields.filter((f) => f.page >= r.from && f.page <= r.to).length)}
+                  onAdd={addParts}
+                  onRename={renamePart}
+                  onMove={(i, d) => {
+                    const order = currentParts.map((p, k) => ({ kind: "old" as const, index: k, name: p.name }));
+                    const j = i + d;
+                    if (j < 0 || j >= order.length) return;
+                    [order[i], order[j]] = [order[j], order[i]];
+                    restructure(order, "A reordenar…");
+                  }}
+                  onRemove={(i) => restructure(currentParts.map((p, k) => ({ kind: "old" as const, index: k, name: p.name })).filter((x) => x.index !== i), "A retirar o documento…")}
+                />
+                <SettingsPanel doc={doc} onPatch={patchDoc} hasInitials={fields.some((f) => f.type === "initials")} />
+              </div>
+            )}
           </div>
         </aside>
 
@@ -368,6 +451,7 @@ export function Editor() {
           <div className="mx-auto max-w-[860px]">
             <PdfPages
               src={pdfUrl}
+              parts={doc.parts}
               cursor={placing ? "crosshair" : undefined}
               onPageClick={(page, x, y, e) => {
                 if (!placing) return;
@@ -668,6 +752,48 @@ function PrefillEditor({ field, onChange }: { field: F; onChange: (p: Partial<F>
         <span>Fixo: o signatário vê o valor mas não o pode alterar (ex.: vencimento, hotel, função).</span>
       </label>
     </div>
+  );
+}
+
+function PackagePanel({ parts, isPackage, busy, fieldsPerPart, onAdd, onRename, onMove, onRemove }: {
+  parts: DocPart[];
+  isPackage: boolean;
+  busy: string | null;
+  fieldsPerPart: number[];
+  onAdd: (files: File[]) => void;
+  onRename: (i: number, name: string) => void;
+  onMove: (i: number, d: -1 | 1) => void;
+  onRemove: (i: number) => void;
+}) {
+  return (
+    <section>
+      <p className="label">Documentos</p>
+      {isPackage ? (
+        <>
+          <p className="mb-2 text-xs text-slate-500">Pacote assinado de uma só vez. No fim, cada documento fica também disponível em separado.</p>
+          <ol className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+            {parts.map((p, i) => (
+              <li key={`${i}-${p.name}`} className="flex items-center gap-1 px-2 py-1.5">
+                <a href={`#parte-${i + 1}`} className="w-5 shrink-0 text-right text-xs font-medium text-slate-400 tabular-nums hover:text-navy-700" title="Ir para o documento">{i + 1}</a>
+                <div className="min-w-0 flex-1">
+                  <input className="input py-1 text-sm" defaultValue={p.name} maxLength={150} aria-label={`Nome do documento ${i + 1}`} onBlur={(e) => onRename(i, e.target.value)} disabled={!!busy} />
+                  <p className="mt-0.5 text-[11px] text-slate-500">{p.pages} {p.pages === 1 ? "página" : "páginas"} · {fieldsPerPart[i]} {fieldsPerPart[i] === 1 ? "campo" : "campos"}</p>
+                </div>
+                <button className="btn-ghost px-1" onClick={() => onMove(i, -1)} disabled={i === 0 || !!busy} aria-label="Subir"><ArrowUp className="h-3.5 w-3.5" /></button>
+                <button className="btn-ghost px-1" onClick={() => onMove(i, 1)} disabled={i === parts.length - 1 || !!busy} aria-label="Descer"><ArrowDown className="h-3.5 w-3.5" /></button>
+                <button className="btn-ghost px-1 text-red-600" onClick={() => onRemove(i)} disabled={!!busy} aria-label="Retirar"><TrashIcon className="h-3.5 w-3.5" /></button>
+              </li>
+            ))}
+          </ol>
+        </>
+      ) : (
+        <p className="mb-2 text-xs text-slate-500">Adicione mais ficheiros para criar um pacote: os signatários recebem um só convite e assinam tudo de uma vez.</p>
+      )}
+      <label className={`btn-secondary mt-2 w-full cursor-pointer justify-center ${busy ? "pointer-events-none opacity-60" : ""}`}>
+        {busy ? <><Spinner className="h-4 w-4" /> {busy}</> : <><PlusIcon className="h-4 w-4" /> Adicionar documento</>}
+        <input type="file" multiple accept=".pdf,.docx,application/pdf" className="sr-only" disabled={!!busy} onChange={(e) => { const f = Array.from(e.target.files ?? []); e.target.value = ""; if (f.length) onAdd(f); }} />
+      </label>
+    </section>
   );
 }
 

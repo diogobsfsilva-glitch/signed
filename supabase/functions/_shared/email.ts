@@ -28,6 +28,7 @@ const L = {
     invite_subject: (s: string, a: string, t: string) => `${s} pede-lhe para ${a}: ${t}`,
     invite_body: (s: string, t: string, a: string) => `<strong>${s}</strong> enviou-lhe o documento <strong>${t}</strong> para ${a}.`,
     cc_needs: "Vai precisar do seu <strong>Cartão de Cidadão com leitor</strong> (ou da <strong>Chave Móvel Digital</strong>) e da aplicação gratuita <strong>Autenticação.gov</strong> instalada no computador. A página explica cada passo.",
+    package_list: (n: number) => `Este envio inclui ${n} documentos:`,
     deadline: (d: string) => `Prazo: ${d}.`,
     invite_title: "Tem um documento à sua espera", reminder_title: "Lembrete de documento pendente", open: "Abrir documento",
     otp_subject: (c: string) => `Código de acesso Signed: ${c}`, otp_title: "Código de acesso",
@@ -49,6 +50,7 @@ const L = {
     invite_subject: (s: string, a: string, t: string) => `${s} asks you to ${a}: ${t}`,
     invite_body: (s: string, t: string, a: string) => `<strong>${s}</strong> sent you the document <strong>${t}</strong> to ${a}.`,
     cc_needs: "You will need your <strong>Portuguese Citizen Card with a card reader</strong> (or the <strong>Digital Mobile Key</strong>) and the free <strong>Autenticação.gov</strong> app installed on your computer. The page explains each step.",
+    package_list: (n: number) => `This envelope includes ${n} documents:`,
     deadline: (d: string) => `Deadline: ${d}.`,
     invite_title: "A document is waiting for you", reminder_title: "Reminder: pending document", open: "Open document",
     otp_subject: (c: string) => `Signed access code: ${c}`, otp_title: "Access code",
@@ -70,6 +72,7 @@ const L = {
     invite_subject: (s: string, a: string, t: string) => `${s} le pide ${a}: ${t}`,
     invite_body: (s: string, t: string, a: string) => `<strong>${s}</strong> le ha enviado el documento <strong>${t}</strong> para ${a}.`,
     cc_needs: "Necesitará su <strong>Tarjeta de Ciudadano portuguesa con lector</strong> (o la <strong>Chave Móvel Digital</strong>) y la aplicación gratuita <strong>Autenticação.gov</strong> instalada en el ordenador. La página explica cada paso.",
+    package_list: (n: number) => `Este envío incluye ${n} documentos:`,
     deadline: (d: string) => `Plazo: ${d}.`,
     invite_title: "Tiene un documento pendiente", reminder_title: "Recordatorio de documento pendiente", open: "Abrir documento",
     otp_subject: (c: string) => `Código de acceso de Signed: ${c}`, otp_title: "Código de acceso",
@@ -91,6 +94,7 @@ const L = {
     invite_subject: (s: string, a: string, t: string) => `${s} vous demande de ${a} : ${t}`,
     invite_body: (s: string, t: string, a: string) => `<strong>${s}</strong> vous a envoyé le document <strong>${t}</strong> à ${a}.`,
     cc_needs: "Vous aurez besoin de votre <strong>carte de citoyen portugaise avec un lecteur</strong> (ou de la <strong>Chave Móvel Digital</strong>) et de l'application gratuite <strong>Autenticação.gov</strong> installée sur votre ordinateur. La page explique chaque étape.",
+    package_list: (n: number) => `Cet envoi comprend ${n} documents :`,
     deadline: (d: string) => `Délai : ${d}.`,
     invite_title: "Un document vous attend", reminder_title: "Rappel : document en attente", open: "Ouvrir le document",
     otp_subject: (c: string) => `Code d'accès Signed : ${c}`, otp_title: "Code d'accès",
@@ -155,6 +159,8 @@ export interface InviteData {
   reminder?: boolean;
   lang?: string | null;
   brand?: Brand | null;
+  /** Pacote: nomes dos documentos incluídos. */
+  documents?: string[] | null;
 }
 
 export function inviteEmail(d: InviteData): { subject: string; html: string } {
@@ -162,6 +168,10 @@ export function inviteEmail(d: InviteData): { subject: string; html: string } {
   const action = d.mode === "qualified" ? (d.step === "fill" ? t.act_fill : t.act_cc) : t.act_sign;
   const subject = `${d.reminder ? t.reminder : ""}${t.invite_subject(d.senderName, action, d.title)}`;
   let body = para(esc(t.hello(d.recipientName))) + para(t.invite_body(esc(d.senderName), esc(d.title), action)) + quote(d.message);
+  if (d.documents && d.documents.length > 1) {
+    body += para(esc(t.package_list(d.documents.length))) +
+      `<ul style="margin:0 0 16px;padding-left:20px;color:#334155;font-size:14px;line-height:1.6">${d.documents.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`;
+  }
   if (d.mode === "qualified" && d.step === "sign") body += para(t.cc_needs);
   if (d.expiresAt) body += para(esc(t.deadline(formatLisbon(d.expiresAt))));
   return {

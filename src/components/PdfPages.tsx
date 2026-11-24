@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type MouseEvent } from "react";
 import { useT } from "../lib/signer-i18n";
+import type { DocPart } from "../../supabase/functions/_shared/types";
+import { partRanges } from "../../supabase/functions/_shared/types";
 import { openPdf, type PdfDoc } from "../lib/pdf";
 import { Alert, Spinner } from "./ui";
 
@@ -10,16 +12,19 @@ interface Props {
   onPageClick?: (page: number, x: number, y: number, e: MouseEvent) => void;
   onLoaded?: (doc: PdfDoc) => void;
   cursor?: string;
+  /** Pacote: mostra o nome de cada documento antes da sua primeira página. */
+  parts?: DocPart[] | null;
 }
 
 /** Mostra todas as páginas de um PDF à largura do contentor. */
-export function PdfPages({ src, overlay, onPageClick, onLoaded, cursor }: Props) {
+export function PdfPages({ src, overlay, onPageClick, onLoaded, cursor, parts }: Props) {
   const wrap = useRef<HTMLDivElement>(null);
   const { t } = useT();
   const [doc, setDoc] = useState<PdfDoc | null>(null);
   const [sizes, setSizes] = useState<{ w: number; h: number }[]>([]);
   const [width, setWidth] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const ranges = parts && parts.length > 1 ? partRanges(parts) : [];
 
   useEffect(() => {
     if (!src) return;
@@ -64,8 +69,15 @@ export function PdfPages({ src, overlay, onPageClick, onLoaded, cursor }: Props)
         <div className="flex flex-col gap-4">
           {sizes.map((s, i) => {
             const h = Math.round((width * s.h) / s.w);
+            const starts = ranges.findIndex((r) => r.from === i + 1);
             return (
               <div key={i} className="relative">
+                {starts >= 0 && (
+                  <div id={`parte-${starts + 1}`} className="mb-2 flex scroll-mt-20 items-baseline gap-2 border-b border-slate-300 pb-1.5">
+                    <span className="text-xs font-semibold tracking-wide text-slate-500 uppercase">{t("pkg_doc", { i: starts + 1, n: ranges.length })}</span>
+                    <span className="truncate font-semibold text-slate-900">{ranges[starts].name}</span>
+                  </div>
+                )}
                 <div
                   className="relative overflow-hidden rounded-sm bg-white shadow-[0_1px_3px_rgba(15,36,69,0.12),0_8px_24px_-12px_rgba(15,36,69,0.25)]"
                   style={{ width, height: h, cursor }}
@@ -80,7 +92,7 @@ export function PdfPages({ src, overlay, onPageClick, onLoaded, cursor }: Props)
                   {overlay && <div className="absolute inset-0">{overlay(i + 1, { width, height: h })}</div>}
                 </div>
                 <div className="mt-1 text-center text-xs text-slate-400">
-                  Página {i + 1} de {sizes.length}
+                  {t("page_of", { i: i + 1, n: sizes.length })}
                 </div>
               </div>
             );

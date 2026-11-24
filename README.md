@@ -12,6 +12,7 @@ O plano completo, com as fases seguintes, está em [docs/PLANO.md](docs/PLANO.md
 | Área | Funcionalidades |
 |---|---|
 | Documentos | Carregar PDF ou Word (o Word é convertido pelo Microsoft 365), pastas, espaços de trabalho (por hotel ou departamento), pesquisa e filtros |
+| Pacotes | Vários ficheiros (PDF ou Word) num só envio: um convite, assinatura de tudo de uma vez, índice dos documentos na página de assinatura. No editor, adicionar, reordenar, renomear e retirar documentos (os campos acompanham). Na conclusão, cada documento também em separado (com o selo do Signed na assinatura simples; cópia para consulta no modo CC), listado no certificado e arquivado no SharePoint em Documentos/ |
 | Editor | Destinatários (assina ou recebe cópia), ordem de assinatura, campos de assinatura, iniciais, texto, data, caixa de seleção, opção única, lista e anexo; campos automáticos (nome, email, data de assinatura); valores pré-preenchidos pelo remetente, opcionalmente fixos; arrastar e redimensionar |
 | Envio | Assunto e mensagem, prazo, lembretes automáticos, envio sequencial ou em paralelo, corrigir nome, email ou prazo depois de enviar (o link antigo deixa de valer), envio em massa a partir de um modelo e de um CSV |
 | Signatário | Link seguro e código por email, preenchimento guiado, assinatura (desenhar, escrever, imagem), anexos (PDF ou imagem, até 10 MB), delegar a outra pessoa, rejeitar com motivo, funciona no telemóvel |

@@ -7,6 +7,7 @@ import type { AuditEventRow, DocumentRow, RecipientRow } from "../../supabase/fu
 import { EVENT_LABELS, parseAttachment, type AttachmentValue } from "../../supabase/functions/_shared/types";
 import { Alert, CheckIcon, DownloadIcon, FullPageSpinner, IdIcon, Modal, ModeBadge, RecipientBadge, ShieldIcon, Spinner, StatusBadge, toast } from "../components/ui";
 import { PdfPages } from "../components/PdfPages";
+import { PartsIndex } from "../components/Parts";
 import { errorMessage, fmtDateTime } from "../lib/format";
 import { useAuth } from "../auth/AuthProvider";
 
@@ -124,7 +125,7 @@ export function DocumentDetail() {
           {doc.status === "completed" && (
             <>
               <button className="btn-primary" onClick={() => download(doc.final_path, `${base}${doc.signature_mode === "qualified" ? "_assinado" : ""}.pdf`)}>
-                <DownloadIcon className="h-4 w-4" /> Documento assinado
+                <DownloadIcon className="h-4 w-4" /> {doc.parts && doc.parts.length > 1 ? "Pacote assinado" : "Documento assinado"}
               </button>
               <button className="btn-secondary" onClick={() => download(doc.audit_path, `${base}_certificado.pdf`)}>
                 <ShieldIcon className="h-4 w-4" /> Certificado
@@ -172,8 +173,34 @@ export function DocumentDetail() {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_380px]">
         <div className="order-2 min-w-0 lg:order-1">
+          {doc.parts && doc.parts.length > 1 && (
+            <>
+              <PartsIndex
+                parts={doc.parts}
+                className="mb-2"
+                action={(i) =>
+                  doc.status === "completed" && doc.final_path ? (
+                    <button
+                      className="btn-ghost shrink-0 px-1.5 py-0.5 text-xs"
+                      title={doc.signature_mode === "qualified" ? "Cópia separada para consulta (as assinaturas CC estão no pacote completo)" : "Descarregar este documento em separado (com o selo do Signed)"}
+                      onClick={() => download(doc.final_path!.replace(/final\.pdf$/, `final_part_${i + 1}.pdf`), `${i + 1}_${doc.parts![i].name.replace(/[^\w\- À-ÿ]+/g, "").trim().replace(/\s+/g, "_") || "documento"}${doc.signature_mode === "qualified" ? "_copia" : ""}.pdf`)}
+                    >
+                      <DownloadIcon className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null
+                }
+              />
+              {doc.status === "completed" && (
+                <p className="mb-4 text-xs text-slate-500">
+                  {doc.signature_mode === "qualified"
+                    ? "As assinaturas com Cartão de Cidadão estão no pacote completo («Pacote assinado»). As cópias separadas servem para consulta e arquivo."
+                    : "Cada documento pode ser descarregado em separado, com o selo do Signed. O pacote completo está em «Pacote assinado»."}
+                </p>
+              )}
+            </>
+          )}
           <div className="rounded-xl bg-slate-100 p-3 sm:p-6">
-            <PdfPages src={preview} />
+            <PdfPages src={preview} parts={doc.parts} />
           </div>
         </div>
 

@@ -12,6 +12,7 @@ interface Row {
   title: string;
   status: DocStatus;
   signature_mode: "simple" | "qualified";
+  parts: { name: string; pages: number }[] | null;
   updated_at: string;
   sent_at: string | null;
   owner_id: string;
@@ -83,7 +84,7 @@ export function Dashboard() {
     const [{ data: docs, error }, { data: f }] = await Promise.all([
       supabase
         .from("documents")
-        .select("id, title, status, signature_mode, updated_at, sent_at, owner_id, folder_id, workspace_id, batch_id, public_link_id, recipients(name, role, status), owner:profiles!documents_owner_id_fkey(full_name, email)")
+        .select("id, title, status, signature_mode, parts, updated_at, sent_at, owner_id, folder_id, workspace_id, batch_id, public_link_id, recipients(name, role, status), owner:profiles!documents_owner_id_fkey(full_name, email)")
         .eq("is_template", false)
         .order("updated_at", { ascending: false })
         .limit(500),
@@ -247,6 +248,7 @@ export function Dashboard() {
                           </p>
                         </div>
                         <div className="flex shrink-0 items-center gap-3">
+                          {r.parts && r.parts.length > 1 && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" title={r.parts.map((p) => p.name).join("\n")}>Pacote · {r.parts.length}</span>}
                           <ModeBadge mode={r.signature_mode} />
                           {r.status === "in_progress" && (
                             <span className="text-xs tabular-nums text-slate-500">

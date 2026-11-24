@@ -1,7 +1,7 @@
 // Regras do fluxo de assinatura (puras, testáveis).
 
-import type { DocPhase, FieldRow, RecipientRow, SignatureMode } from "./types.ts";
-import { FIELD_LABELS, isPrefillable, isSignerInput } from "./types.ts";
+import type { DocPart, DocPhase, FieldRow, RecipientRow, SignatureMode } from "./types.ts";
+import { FIELD_LABELS, isPrefillable, isSignerInput, partsProblem } from "./types.ts";
 
 type R = Pick<RecipientRow, "id" | "role" | "signing_order" | "status">;
 type F = Pick<FieldRow, "recipient_id" | "type"> & { readonly?: boolean | null };
@@ -60,13 +60,15 @@ export interface ValidationIssue {
 
 /** Validações antes de enviar. */
 export function validateForSend(
-  doc: WorkflowDoc & { original_path: string | null; is_template?: boolean },
+  doc: WorkflowDoc & { original_path: string | null; is_template?: boolean; parts?: DocPart[] | null; page_count?: number | null },
   recipients: (R & { name: string; email: string; in_person?: boolean | null; group_emails?: string[] | null })[],
   fields: (F & { id: string; options: string[] | null; value?: string | null; label?: string | null; required?: boolean })[],
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   if (doc.is_template) issues.push({ message: "Um modelo não pode ser enviado. Use-o para criar um documento." });
   if (!doc.original_path) issues.push({ message: "Falta carregar o documento PDF." });
+  const pp = partsProblem(doc.parts, doc.page_count);
+  if (pp) issues.push({ message: pp });
   const signers = recipients.filter((r) => r.role === "signer");
   if (signers.length === 0) issues.push({ message: "Adicione pelo menos um signatário." });
   const emails = new Set<string>();

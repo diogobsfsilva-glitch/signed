@@ -260,3 +260,12 @@ export async function assertValidPdf(pdfBytes: Uint8Array): Promise<number> {
   if (doc.getPageCount() < 1) throw new Error("O PDF não tem páginas.");
   return doc.getPageCount();
 }
+
+/** Copia um intervalo de páginas (1-based, inclusive) para um PDF novo (um documento de um pacote). */
+export async function extractPages(pdfBytes: Uint8Array, from: number, to: number): Promise<Uint8Array> {
+  const src = await PDFDocument.load(pdfBytes, { updateMetadata: false });
+  const out = await PDFDocument.create();
+  const idx = Array.from({ length: to - from + 1 }, (_, i) => from - 1 + i);
+  for (const p of await out.copyPages(src, idx)) out.addPage(p);
+  return await out.save();
+}

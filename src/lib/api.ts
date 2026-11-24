@@ -65,6 +65,6 @@ export interface M365TestResult {
 /** Administração: testa o envio de email e a escrita no SharePoint. */
 export const m365Test = () => call<M365TestResult>("document-actions", { action: "m365-test" }, true);
 
-export const convertDocx = (document_id: string) => call<{ ok: boolean; path: string; pages: number }>("convert-docx", { document_id }, true);
+export const convertDocx = (document_id: string, part = false) => call<{ ok: boolean; path: string; pages: number }>("convert-docx", { document_id, part }, true);
 
 export const signerApi = <T,>(body: Record<string, unknown>) => call<T>("signer-api", body, false);

@@ -3,9 +3,9 @@
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { DocumentRow, FieldRow, RecipientRow } from "./types.ts";
-import { autoFieldValue, isAutoField, parseAttachment } from "./types.ts";
+import { autoFieldValue, isAutoField, parseAttachment, partRanges, partsProblem } from "./types.ts";
 import { allSigned, currentRecipients, fillPhaseDone, validateForSend } from "./workflow.ts";
-import { assertValidPdf, flattenFields } from "./pdf.ts";
+import { assertValidPdf, extractPages, flattenFields } from "./pdf.ts";
 import { loadSealKey, type SealKey, sealPdf } from "./pades-sign.ts";
 import { buildAuditCertificate } from "./audit-cert.ts";
 import { type Brand, completedEmail, deliver, inviteEmail } from "./email.ts";
@@ -95,6 +95,8 @@ export async function sendDocument(
     throw new HttpError(422, (e as Error).message, "invalid_pdf");
   });
   if (b.fields.some((f) => f.page > pages)) throw new HttpError(422, "Há campos em páginas que não existem no PDF.", "validation");
+  const pp = partsProblem(b.doc.parts, pages);
+  if (pp) throw new HttpError(422, pp, "validation");
   const hash = await sha256Hex(pdf);
   for (const r of b.recipients) {
     await sb
@@ -320,6 +322,7 @@ async function notifyCurrent(sb: SupabaseClient, b: Bundle) {
       expiresAt: b.doc.expires_at,
       lang: r.language,
       brand,
+      documents: b.doc.parts?.map((x) => x.name),
     });
     for (const to of recipientEmails(r)) {
       await deliver(sb, { to, subject: b.doc.subject || mail.subject, html: mail.html, kind: "invite", documentId: b.doc.id, recipientId: r.id });
@@ -356,6 +359,7 @@ export async function remind(sb: SupabaseClient, b: Bundle, r: RecipientRow): Pr
     reminder: true,
     lang: r.language,
     brand: await brandFor(sb, b.doc.workspace_id),
+    documents: b.doc.parts?.map((x) => x.name),
   });
   for (const to of recipientEmails(r)) {
     await deliver(sb, { to, subject: mail.subject, html: mail.html, kind: "reminder", documentId: b.doc.id, recipientId: r.id });
@@ -406,19 +410,37 @@ async function finalize(sb: SupabaseClient, b: Bundle) {
   const key = await sealKey();
   let finalBytes: Uint8Array;
   let finalLabel: string;
+  let flat: Uint8Array | null = null;
   if (doc.signature_mode === "qualified") {
     // O PDF assinado com CC não pode ser alterado (invalidaria as assinaturas).
     finalBytes = await download(sb, doc.current_path!);
     finalLabel = "do PDF assinado";
   } else {
     const original = await download(sb, doc.original_path!);
-    const flat = await flattenFields(original, b.fields, { mode: "simple" });
+    flat = await flattenFields(original, b.fields, { mode: "simple" });
     finalBytes = key ? await sealPdf(flat, key, { reason: "Documento assinado no Signed", name: "Signed - Altis Hotels" }) : flat;
-    finalLabel = "do PDF final";
+    finalLabel = doc.parts && doc.parts.length > 1 ? "do pacote completo" : "do PDF final";
   }
   const finalPath = `${docFolder(doc)}/final.pdf`;
   await upload(sb, finalPath, finalBytes);
   const finalHash = await sha256Hex(finalBytes);
+
+  // Pacote: cada documento também em separado. Na assinatura simples, cada um leva o seu selo;
+  // no modo CC, as cópias separadas não têm as assinaturas (essas só valem no pacote completo).
+  const separated: { name: string; label: string; from: number; to: number; path: string; bytes: Uint8Array; sha256: string }[] = [];
+  if (doc.parts && doc.parts.length > 1) {
+    for (const [i, part] of partRanges(doc.parts).entries()) {
+      try {
+        let bytes = await extractPages(flat ?? finalBytes, part.from, part.to);
+        if (flat && key) bytes = await sealPdf(bytes, key, { reason: "Documento assinado no Signed", name: "Signed - Altis Hotels" });
+        const path = `${docFolder(doc)}/final_part_${i + 1}.pdf`;
+        await upload(sb, path, bytes);
+        separated.push({ name: `${i + 1}_${safeFileName(part.name)}${flat ? "" : "_copia"}.pdf`, label: part.name, from: part.from, to: part.to, path, bytes, sha256: await sha256Hex(bytes) });
+      } catch (e) {
+        console.error(`parte ${i + 1} do pacote`, e);
+      }
+    }
+  }
   const completedAt = new Date().toISOString();
   await audit(sb, doc.id, "document.completed", { details: { final_sha256: finalHash, sealed: !!key || doc.signature_mode === "qualified" } });
 
@@ -444,6 +466,10 @@ async function finalize(sb: SupabaseClient, b: Bundle) {
     events: events ?? [],
     chainIntact: intact === true,
     attachments: attachmentsOf(b).map((a) => ({ recipient: a.recipient, name: a.file.name, size: a.file.size, sha256: a.file.sha256 })),
+    parts: doc.parts && doc.parts.length > 1
+      ? partRanges(doc.parts).map((p) => ({ ...p, sha256: separated.find((x) => x.from === p.from)?.sha256 ?? null }))
+      : undefined,
+    partsSigned: !!flat,
   });
   if (key) cert = await sealPdf(cert, key, { reason: "Certificado de conclusão", name: "Signed - Altis Hotels" });
   const auditPath = `${docFolder(doc)}/certificado.pdf`;
@@ -494,6 +520,7 @@ async function finalize(sb: SupabaseClient, b: Bundle) {
   const archived = [
     { name: finalName, bytes: finalBytes },
     { name: certName, bytes: cert },
+    ...separated.map((x) => ({ name: `Documentos/${x.name}`, bytes: x.bytes })),
   ];
   for (const [i, a] of attachmentsOf(b).entries()) {
     try {

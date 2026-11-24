@@ -459,3 +459,52 @@ describe("idiomas", () => {
     for (const l of ["en", "es", "fr"] as const) expect(Object.keys(DICTS[l]).sort()).toEqual(keys);
   });
 });
+
+describe("pacotes de documentos", () => {
+  it("calcula as páginas de cada documento e valida a lista", async () => {
+    const { partRanges, partsProblem } = await import("../supabase/functions/_shared/types.ts");
+    const parts = [{ name: "Contrato", pages: 3 }, { name: "Anexo I", pages: 1 }, { name: "RGPD", pages: 2 }];
+    expect(partRanges(parts)).toEqual([
+      { name: "Contrato", from: 1, to: 3 },
+      { name: "Anexo I", from: 4, to: 4 },
+      { name: "RGPD", from: 5, to: 6 },
+    ]);
+    expect(partsProblem(parts, 6)).toBeNull();
+    expect(partsProblem(null, 6)).toBeNull();
+    expect(partsProblem(parts, 7)).toMatch(/não corresponde/);
+    expect(partsProblem([{ name: " ", pages: 1 }], 1)).toMatch(/nome/);
+    expect(partsProblem([{ name: "A", pages: 0 }], 0)).toMatch(/sem páginas/);
+    const base = { signature_mode: "simple" as const, phase: "fill" as const, sequential: true, original_path: "x" };
+    const rec = [{ id: "r", role: "signer" as const, signing_order: 1, status: "pending" as const, name: "Ana", email: "ana@x.pt" }];
+    const fld = [{ id: "f", recipient_id: "r", type: "signature" as const, options: null, page: 1 }];
+    expect(validateForSend({ ...base, parts, page_count: 5 }, rec, fld).map((i) => i.message).join()).toMatch(/pacote não corresponde/);
+    expect(validateForSend({ ...base, parts, page_count: 6 }, rec, fld)).toEqual([]);
+  });
+
+  it("separa um documento do pacote sem perder a rotação", async () => {
+    const { extractPages } = await import("../supabase/functions/_shared/pdf.ts");
+    const doc = await PDFDocument.create();
+    for (let i = 0; i < 5; i++) {
+      const p = doc.addPage([400 + i * 10, 600]);
+      if (i === 3) p.setRotation(degrees(90));
+    }
+    const part = await PDFDocument.load(await extractPages(await doc.save(), 3, 4));
+    expect(part.getPageCount()).toBe(2);
+    expect(part.getPage(0).getWidth()).toBe(420);
+    expect(part.getPage(1).getRotation().angle).toBe(90);
+  });
+
+  it("o certificado lista os documentos do pacote", async () => {
+    const bytes = await buildAuditCertificate({
+      orgName: "Altis Hotels",
+      document: { id: "d1", title: "Admissão", signature_mode: "simple", sent_at: null, completed_at: null, original_sha256: null, final_sha256: null, final_label: "do pacote completo" },
+      owner: { name: "Diogo", email: "d@altishotels.com" },
+      recipients: [],
+      events: [],
+      chainIntact: true,
+      parts: [{ name: "Contrato", from: 1, to: 3, sha256: "a".repeat(64) }, { name: "RGPD", from: 4, to: 4, sha256: null }],
+      partsSigned: true,
+    });
+    expect((await PDFDocument.load(bytes)).getPageCount()).toBeGreaterThanOrEqual(1);
+  });
+});

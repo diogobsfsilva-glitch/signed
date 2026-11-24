@@ -27,6 +27,10 @@ export interface AuditCertificateInput {
   chainIntact: boolean;
   /** Anexos carregados pelos signatários. */
   attachments?: { recipient: string; name: string; size: number; sha256: string }[];
+  /** Pacote: documentos incluídos, com as páginas e o hash da cópia separada. */
+  parts?: { name: string; from: number; to: number; sha256: string | null }[];
+  /** As cópias separadas têm o selo do Signed (assinatura simples) ou são só cópias (modo CC). */
+  partsSigned?: boolean;
 }
 
 const A4 = { w: 595.28, h: 841.89 };
@@ -132,6 +136,24 @@ export async function buildAuditCertificate(input: AuditCertificateInput): Promi
   w.kv(`SHA-256 ${input.document.final_label}`, input.document.final_sha256 ?? "—");
   w.kv("Registo de auditoria", input.chainIntact ? "Íntegro (cadeia de hashes verificada)" : "ATENÇÃO: a cadeia de hashes não confere");
   w.gap(6);
+
+  if (input.parts?.length) {
+    w.text(`Documentos do pacote (${input.parts.length})`, { size: 13, bold: true });
+    w.rule();
+    for (const [i, p] of input.parts.entries()) {
+      w.text(`${i + 1}. ${p.name}`, { bold: true, size: 9.5 });
+      w.kv("Páginas", p.from === p.to ? `${p.from}` : `${p.from} a ${p.to}`);
+      if (p.sha256) w.kv("SHA-256 da cópia separada", p.sha256);
+      w.gap(3);
+    }
+    w.text(
+      input.partsSigned
+        ? "Todos os documentos foram assinados em conjunto. As cópias separadas têm o selo do Signed e o mesmo valor do pacote completo."
+        : "Todos os documentos foram assinados em conjunto. As assinaturas qualificadas estão no pacote completo; as cópias separadas são apenas para consulta.",
+      { size: 8.5, color: GREY },
+    );
+    w.gap(8);
+  }
 
   w.text("Destinatários", { size: 13, bold: true });
   w.rule();

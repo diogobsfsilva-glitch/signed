@@ -134,6 +134,7 @@ function publicDoc(b: Bundle) {
     phase: b.doc.phase,
     message: b.doc.message,
     pages: b.doc.pages,
+    parts: b.doc.parts && b.doc.parts.length > 1 ? b.doc.parts : null,
     expires_at: b.doc.expires_at,
     sender: b.owner.full_name || b.owner.email,
   };

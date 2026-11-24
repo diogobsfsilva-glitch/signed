@@ -22,6 +22,7 @@ export interface TemplateRow {
   id: string;
   title: string;
   signature_mode: "simple" | "qualified";
+  parts: { name: string; pages: number }[] | null;
   updated_at: string;
   owner_id: string;
   workspace_id: string;
@@ -44,7 +45,7 @@ export function Templates() {
     supabase
       .from("documents")
       .select(
-        "id, title, signature_mode, updated_at, owner_id, workspace_id, original_path, recipients(id, name, email, role, signing_order, civil_id, color, group_emails), fields(count), owner:profiles!documents_owner_id_fkey(full_name, email)",
+        "id, title, signature_mode, parts, updated_at, owner_id, workspace_id, original_path, recipients(id, name, email, role, signing_order, civil_id, color, group_emails), fields(count), owner:profiles!documents_owner_id_fkey(full_name, email)",
       )
       .eq("is_template", true)
       .order("title")
@@ -99,6 +100,7 @@ export function Templates() {
                 <li key={r.id} className="card flex flex-col p-4">
                   <div className="flex items-start justify-between gap-2">
                     <p className="min-w-0 flex-1 font-medium text-slate-900">{r.title}</p>
+                    {r.parts && r.parts.length > 1 && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" title={r.parts.map((p) => p.name).join("\n")}>Pacote · {r.parts.length}</span>}
                     <ModeBadge mode={r.signature_mode} />
                   </div>
                   <p className="mt-1 text-sm text-slate-500">

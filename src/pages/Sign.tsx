@@ -6,6 +6,8 @@ import { SUPABASE_ANON_KEY, SUPABASE_URL, BUCKET } from "../lib/supabase";
 import type { FieldType } from "../../supabase/functions/_shared/types";
 import { isAutoField } from "../../supabase/functions/_shared/types";
 import { PdfPages } from "../components/PdfPages";
+import { PartsIndex } from "../components/Parts";
+import type { DocPart } from "../../supabase/functions/_shared/types";
 import { BrandMark, brandStyle, type BrandInfo } from "../components/Brand";
 import { SignaturePad } from "../components/SignaturePad";
 import { FieldValue } from "../components/FieldBox";
@@ -36,7 +38,7 @@ interface SField {
   editable: boolean;
 }
 interface LoadInfo {
-  document: { id: string; title: string; status: string; mode: "simple" | "qualified"; phase: "fill" | "sign"; message: string | null; sender: string; expires_at: string | null };
+  document: { id: string; title: string; status: string; mode: "simple" | "qualified"; phase: "fill" | "sign"; message: string | null; sender: string; expires_at: string | null; parts?: DocPart[] | null };
   recipient: { id: string; name: string; status: string; color: string };
   step: "fill" | "sign_simple" | "sign_cc" | "wait" | "done";
   yourTurn: boolean;
@@ -294,6 +296,7 @@ function Flow({ token, session, info, reload, onFinished, inPerson }: { token: s
           <button className="btn-ghost text-red-700" onClick={() => setDeclining(true)}>{t("decline")}</button>
         )}
       </div>
+      <PartsIndex parts={info.document.parts} className="w-full" />
     </div>
   );
 
@@ -393,6 +396,7 @@ function FillAndSign({ token, session, info, onFinished }: { token: string; sess
       <div className="mx-auto max-w-[860px]">
         <PdfPages
           src={info.pdfUrl}
+          parts={info.document.parts}
           overlay={(page, size) => (
             <>
               {info.others.filter((f) => f.page === page).map((f) => (
@@ -718,7 +722,7 @@ function CcWizard({ token, session, info, onDone, onFinished }: { token: string;
         </ol>
       </div>
       <div className="min-w-0">
-        <PdfPages src={info.pdfUrl} />
+        <PdfPages src={info.pdfUrl} parts={info.document.parts} />
       </div>
     </div>
   );
