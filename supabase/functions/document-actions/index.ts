@@ -4,9 +4,10 @@ import { clientIp, handler, HttpError, json, readJson, userAgent } from "../_sha
 import { canManage, requireUser } from "../_shared/auth.ts";
 import { advance, audit, createSignerSession, loadBundle, REASSIGNABLE, reassignRecipient, recipientEmails, remind, sendDocument, serviceClient, signerToken } from "../_shared/engine.ts";
 import { currentRecipients } from "../_shared/workflow.ts";
+import { m365Config, sendMail, uploadToSharePoint } from "../_shared/m365.ts";
 
 interface Body {
-  action: "send" | "cancel" | "remind" | "correct" | "in_person";
+  action: "send" | "cancel" | "remind" | "correct" | "in_person" | "m365-test";
   document_id: string;
   recipient_id?: string;
   /** correct: destinatários a corrigir */
@@ -21,6 +22,7 @@ Deno.serve(handler(async (req) => {
   const sb = serviceClient();
   const user = await requireUser(sb, req);
   const body = await readJson<Body>(req);
+  if (body.action === "m365-test") return json(await m365Test(user));
   if (!body.document_id) throw new HttpError(400, "Falta o documento.");
   const b = await loadBundle(sb, body.document_id).catch(() => {
     throw new HttpError(404, "Documento não encontrado.");
@@ -128,3 +130,39 @@ Deno.serve(handler(async (req) => {
   }
   throw new HttpError(400, "Ação desconhecida.");
 }));
+
+/** Administração: confirma a ligação ao Microsoft 365 (email de teste e escrita no SharePoint). */
+async function m365Test(user: { role: string; email: string }) {
+  if (user.role !== "admin") throw new HttpError(403, "Só administradores.");
+  const names = ["M365_TENANT_ID", "M365_CLIENT_ID", "M365_CLIENT_SECRET", "M365_SENDER", "M365_SHAREPOINT_SITE_ID"];
+  const missing = names.filter((n) => !Deno.env.get(n));
+  const cfg = m365Config();
+  const out: {
+    missing: string[];
+    sender: string | null;
+    mail: { ok: boolean; to?: string; error?: string } | null;
+    sharepoint: { ok: boolean; url?: string; error?: string } | null;
+  } = { missing, sender: cfg?.sender ?? null, mail: null, sharepoint: null };
+  if (!cfg) return out;
+  const msg = (e: unknown) => String((e as Error)?.message ?? e).slice(0, 600);
+  try {
+    await sendMail(cfg, {
+      to: user.email,
+      subject: "Signed: teste do Microsoft 365",
+      html: `<p>Este é um email de teste do Signed, enviado a partir de <strong>${cfg.sender}</strong>.</p><p>Se o recebeu, o envio de emails está a funcionar.</p>`,
+    });
+    out.mail = { ok: true, to: user.email };
+  } catch (e) {
+    out.mail = { ok: false, error: msg(e) };
+  }
+  if (cfg.siteId) {
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const url = await uploadToSharePoint(cfg, `${cfg.archiveFolder}/_teste/ligacao_${stamp}.txt`, new TextEncoder().encode(`Teste do Signed em ${new Date().toISOString()}\n`));
+      out.sharepoint = { ok: true, url };
+    } catch (e) {
+      out.sharepoint = { ok: false, error: msg(e) };
+    }
+  }
+  return out;
+}

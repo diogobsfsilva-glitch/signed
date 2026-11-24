@@ -56,6 +56,15 @@ export function rememberSignerSession(token: string, session: string) {
   }
 }
 
+export interface M365TestResult {
+  missing: string[];
+  sender: string | null;
+  mail: { ok: boolean; to?: string; error?: string } | null;
+  sharepoint: { ok: boolean; url?: string; error?: string } | null;
+}
+/** Administração: testa o envio de email e a escrita no SharePoint. */
+export const m365Test = () => call<M365TestResult>("document-actions", { action: "m365-test" }, true);
+
 export const convertDocx = (document_id: string) => call<{ ok: boolean; path: string; pages: number }>("convert-docx", { document_id }, true);
 
 export const signerApi = <T,>(body: Record<string, unknown>) => call<T>("signer-api", body, false);

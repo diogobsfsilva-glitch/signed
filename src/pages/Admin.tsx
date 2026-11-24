@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth, type Profile } from "../auth/AuthProvider";
 import { Alert, FullPageSpinner, Modal, PlusIcon, Spinner, TrashIcon, toast } from "../components/ui";
 import { BrandMark, luminance } from "../components/Brand";
+import { m365Test, type M365TestResult } from "../lib/api";
 import { errorMessage, fmtDate } from "../lib/format";
 
 type Tab = "workspaces" | "users" | "settings";
@@ -264,7 +265,57 @@ function Settings() {
       </div>
       {saved && <Alert kind="success">Definições guardadas.</Alert>}
       <button className="btn-primary">Guardar</button>
+      <M365Check />
     </form>
+  );
+}
+
+/** Testa a ligação ao Microsoft 365: email de teste para o administrador e ficheiro de teste no SharePoint. */
+function M365Check() {
+  const [busy, setBusy] = useState(false);
+  const [r, setR] = useState<M365TestResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const line = (ok: boolean, text: string, detail?: string) => (
+    <li className="flex gap-2 text-sm">
+      <span className={ok ? "text-emerald-700" : "text-red-700"}>{ok ? "✓" : "✕"}</span>
+      <span>
+        {text}
+        {detail && <span className="block break-all text-xs text-slate-500">{detail}</span>}
+      </span>
+    </li>
+  );
+  return (
+    <div className="mt-6 border-t border-slate-200 pt-5">
+      <p className="label">Microsoft 365</p>
+      <p className="mb-3 text-xs text-slate-500">Envia um email de teste para si e grava um ficheiro de teste na pasta de arquivo do SharePoint.</p>
+      <button
+        type="button"
+        className="btn-secondary"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setErr(null);
+          setR(null);
+          try {
+            setR(await m365Test());
+          } catch (e) {
+            setErr(errorMessage(e));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy && <Spinner className="h-4 w-4" />} Testar Microsoft 365
+      </button>
+      {err && <div className="mt-3"><Alert>{err}</Alert></div>}
+      {r && (
+        <ul className="mt-3 space-y-1.5">
+          {r.missing.length > 0 && line(false, `Falta configurar: ${r.missing.join(", ")}`)}
+          {r.mail && line(r.mail.ok, r.mail.ok ? `Email de teste enviado de ${r.sender} para ${r.mail.to}. Confirme que chegou (veja também o spam).` : "O envio de email falhou.", r.mail.error)}
+          {r.sharepoint && line(r.sharepoint.ok, r.sharepoint.ok ? "Ficheiro de teste gravado no SharePoint." : "A escrita no SharePoint falhou.", r.sharepoint.ok ? r.sharepoint.url : r.sharepoint.error)}
+        </ul>
+      )}
+    </div>
   );
 }
 
