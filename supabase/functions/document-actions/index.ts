@@ -2,7 +2,7 @@
 
 import { clientIp, handler, HttpError, json, readJson, userAgent } from "../_shared/http.ts";
 import { canManage, requireUser } from "../_shared/auth.ts";
-import { advance, audit, createSignerSession, loadBundle, REASSIGNABLE, reassignRecipient, recipientEmails, remind, sendDocument, serviceClient, signerToken } from "../_shared/engine.ts";
+import { advance, audit, createSignerSession, loadBundle, REASSIGNABLE, reassignRecipient, recipientEmails, remind, sendDocument, serviceClient, signerToken, withDocLock } from "../_shared/engine.ts";
 import { currentRecipients } from "../_shared/workflow.ts";
 import { m365Config, sendMail, uploadToSharePoint } from "../_shared/m365.ts";
 
@@ -40,10 +40,13 @@ Deno.serve(handler(async (req) => {
 
     case "cancel": {
       if (!(await canManage(sb, user, b.doc))) throw new HttpError(403, "Sem permissão.");
-      if (b.doc.status !== "in_progress") throw new HttpError(409, "Só é possível cancelar documentos em curso.");
-      await sb.from("documents").update({ status: "cancelled" }).eq("id", b.doc.id);
-      await sb.from("recipients").update({ token_hash: null }).eq("document_id", b.doc.id);
-      await audit(sb, b.doc.id, "document.cancelled", { actorUserId: user.id, ip, ua });
+      // Com o trinco: não se cruza com a conclusão nem com uma assinatura a ser gravada.
+      await withDocLock(sb, b.doc.id, async (b) => {
+        const { data: done } = await sb.from("documents").update({ status: "cancelled" }).eq("id", b.doc.id).eq("status", "in_progress").select("id");
+        if (!done?.length) throw new HttpError(409, "Só é possível cancelar documentos em curso. Atualize a página.");
+        await sb.from("recipients").update({ token_hash: null }).eq("document_id", b.doc.id);
+        await audit(sb, b.doc.id, "document.cancelled", { actorUserId: user.id, ip, ua });
+      });
       return json({ ok: true });
     }
 
@@ -96,11 +99,13 @@ Deno.serve(handler(async (req) => {
           throw new HttpError(409, `${r.name} já ${r.status === "signed" ? "assinou" : r.status === "filled" ? "preencheu os dados" : "respondeu"} e não pode ser alterado.`);
         }
         if (!to.name || to.name.length > 200) throw new HttpError(422, "Indique o nome.", "validation");
-        if (!EMAIL_RE.test(to.email)) throw new HttpError(422, `Email inválido: ${to.email}`, "validation");
+        // Presenciais e grupos podem continuar sem email próprio.
+        const emailOptional = !r.email && (r.in_person || !!r.group_emails?.length);
+        if (!(emailOptional && !to.email) && !EMAIL_RE.test(to.email)) throw new HttpError(422, `Email inválido: ${to.email || "(vazio)"}`, "validation");
         if (to.civil_id && !/^[0-9]{6,9}$/.test(to.civil_id)) throw new HttpError(422, "O nº de identificação civil tem entre 6 e 9 dígitos.", "validation");
         changes.push({ id: r.id, from: { name: r.name, email: r.email, civil_id: r.civil_id }, to });
       }
-      const finalEmails = b.recipients.map((r) => changes.find((c) => c.id === r.id)?.to.email ?? r.email.toLowerCase());
+      const finalEmails = b.recipients.map((r) => changes.find((c) => c.id === r.id)?.to.email ?? r.email.toLowerCase()).filter(Boolean);
       if (new Set(finalEmails).size !== finalEmails.length) throw new HttpError(422, "O mesmo email aparece em dois destinatários.", "validation");
 
       let expires: { from: string | null; to: string | null } | null = null;
@@ -116,13 +121,22 @@ Deno.serve(handler(async (req) => {
       }
       if (!changes.length && !expires) throw new HttpError(422, "Não há alterações.", "validation");
 
-      for (const c of changes) await reassignRecipient(sb, b.recipients.find((x) => x.id === c.id)!, c.to);
-      if (expires) await sb.from("documents").update({ expires_at: expires.to }).eq("id", b.doc.id);
-      await audit(sb, b.doc.id, "document.corrected", {
-        actorUserId: user.id,
-        ip,
-        ua,
-        details: { recipients: changes.map((c) => ({ recipient_id: c.id, from: c.from, to: c.to })), expires_at: expires },
+      await withDocLock(sb, b.doc.id, async (fb) => {
+        if (fb.doc.status !== "in_progress") throw new HttpError(409, "O documento já não está em curso. Atualize a página.");
+        for (const c of changes) {
+          const cur = fb.recipients.find((x) => x.id === c.id)!;
+          if (cur.role === "signer" && !REASSIGNABLE.includes(cur.status)) {
+            throw new HttpError(409, `${cur.name} acabou de responder ao documento e já não pode ser alterado. Atualize a página.`);
+          }
+          await reassignRecipient(sb, cur, c.to);
+        }
+        if (expires) await sb.from("documents").update({ expires_at: expires.to }).eq("id", b.doc.id);
+        await audit(sb, b.doc.id, "document.corrected", {
+          actorUserId: user.id,
+          ip,
+          ua,
+          details: { recipients: changes.map((c) => ({ recipient_id: c.id, from: c.from, to: c.to })), expires_at: expires },
+        });
       });
       await advance(sb, b.doc.id);
       return json({ ok: true, changed: changes.length });

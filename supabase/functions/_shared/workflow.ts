@@ -130,6 +130,14 @@ function dedupe(list: ValidationIssue[]): ValidationIssue[] {
   return list.filter((i) => (seen.has(i.message) ? false : (seen.add(i.message), true)));
 }
 
+/** AAAA-MM-DD de um dia que existe (rejeita 2026-02-31, que o Date.parse aceita). */
+export function isValidIsoDate(v: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (!m) return false;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+}
+
 /** Valida os valores submetidos por um signatário para os seus campos. */
 export function validateFieldValues(
   fields: Pick<FieldRow, "id" | "type" | "required" | "options" | "label">[],
@@ -145,6 +153,10 @@ export function validateFieldValues(
       continue;
     }
     if (empty) continue;
+    if (typeof v !== "string") {
+      errors.push(`Valor inválido em "${name}".`);
+      continue;
+    }
     switch (f.type) {
       case "signature":
       case "initials":
@@ -153,7 +165,7 @@ export function validateFieldValues(
         }
         break;
       case "date":
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(v!) || isNaN(Date.parse(v!))) errors.push(`Data inválida em "${name}".`);
+        if (!isValidIsoDate(v)) errors.push(`Data inválida em "${name}".`);
         break;
       case "checkbox":
         if (v !== "true" && v !== "false") errors.push(`Valor inválido em "${name}".`);

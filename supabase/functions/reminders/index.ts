@@ -2,7 +2,7 @@
 // e retoma documentos que tenham ficado a meio de uma transição.
 
 import { handler, HttpError, json } from "../_shared/http.ts";
-import { advance, appUrl, audit, loadBundle, remind, serviceClient } from "../_shared/engine.ts";
+import { advance, appUrl, audit, loadBundle, remind, serviceClient, withDocLock } from "../_shared/engine.ts";
 import { deliver, expiredEmail } from "../_shared/email.ts";
 import { currentRecipients } from "../_shared/workflow.ts";
 
@@ -13,15 +13,21 @@ Deno.serve(handler(async (req) => {
   const now = Date.now();
   const stats = { expired: 0, reminded: 0, resumed: 0, errors: 0 };
 
-  const { data: docs } = await sb.from("documents").select("id").eq("status", "in_progress").limit(500);
+  // Os mais antigos primeiro; acima de 1000 em curso, o resto é tratado na hora seguinte.
+  const { data: docs } = await sb.from("documents").select("id").eq("status", "in_progress").order("sent_at").limit(1000);
   for (const { id } of docs ?? []) {
     try {
       const b = await loadBundle(sb, id);
       if (b.doc.expires_at && new Date(b.doc.expires_at).getTime() < now) {
-        const { data } = await sb.from("documents").update({ status: "expired" }).eq("id", id).eq("status", "in_progress").select("id");
-        if (data?.length) {
+        // Com o trinco: não expira um documento que está a ser concluído nesse instante.
+        const expired = await withDocLock(sb, id, async () => {
+          const { data } = await sb.from("documents").update({ status: "expired" }).eq("id", id).eq("status", "in_progress").select("id");
+          if (!data?.length) return false;
           await sb.from("recipients").update({ token_hash: null }).eq("document_id", id);
           await audit(sb, id, "document.expired");
+          return true;
+        });
+        if (expired) {
           const mail = expiredEmail(b.owner.full_name || b.owner.email, b.doc.title, `${appUrl()}/documentos/${id}`);
           await deliver(sb, { to: b.owner.email, subject: mail.subject, html: mail.html, kind: "expired", documentId: id });
           stats.expired++;

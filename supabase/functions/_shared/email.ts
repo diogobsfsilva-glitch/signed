@@ -31,7 +31,7 @@ const L = {
     package_list: (n: number) => `Este envio inclui ${n} documentos:`,
     deadline: (d: string) => `Prazo: ${d}.`,
     invite_title: "Tem um documento à sua espera", reminder_title: "Lembrete de documento pendente", open: "Abrir documento",
-    otp_subject: (c: string) => `Código de acesso Signed: ${c}`, otp_title: "Código de acesso",
+    otp_subject: (t: string) => `Código de acesso Signed: ${t}`, otp_title: "Código de acesso",
     otp_use: (t: string) => `Use este código para abrir o documento <strong>${t}</strong>:`,
     otp_valid: "O código é válido durante 10 minutos. Se não pediu este código, ignore este email.",
     links_valid: "As ligações são válidas durante 7 dias.", attached: "Os documentos seguem em anexo.",
@@ -53,7 +53,7 @@ const L = {
     package_list: (n: number) => `This envelope includes ${n} documents:`,
     deadline: (d: string) => `Deadline: ${d}.`,
     invite_title: "A document is waiting for you", reminder_title: "Reminder: pending document", open: "Open document",
-    otp_subject: (c: string) => `Signed access code: ${c}`, otp_title: "Access code",
+    otp_subject: (t: string) => `Signed access code: ${t}`, otp_title: "Access code",
     otp_use: (t: string) => `Use this code to open the document <strong>${t}</strong>:`,
     otp_valid: "The code is valid for 10 minutes. If you did not request it, please ignore this email.",
     links_valid: "The links are valid for 7 days.", attached: "The documents are attached.",
@@ -75,7 +75,7 @@ const L = {
     package_list: (n: number) => `Este envío incluye ${n} documentos:`,
     deadline: (d: string) => `Plazo: ${d}.`,
     invite_title: "Tiene un documento pendiente", reminder_title: "Recordatorio de documento pendiente", open: "Abrir documento",
-    otp_subject: (c: string) => `Código de acceso de Signed: ${c}`, otp_title: "Código de acceso",
+    otp_subject: (t: string) => `Código de acceso de Signed: ${t}`, otp_title: "Código de acceso",
     otp_use: (t: string) => `Use este código para abrir el documento <strong>${t}</strong>:`,
     otp_valid: "El código es válido durante 10 minutos. Si no lo ha pedido, ignore este correo.",
     links_valid: "Los enlaces son válidos durante 7 días.", attached: "Los documentos van adjuntos.",
@@ -97,7 +97,7 @@ const L = {
     package_list: (n: number) => `Cet envoi comprend ${n} documents :`,
     deadline: (d: string) => `Délai : ${d}.`,
     invite_title: "Un document vous attend", reminder_title: "Rappel : document en attente", open: "Ouvrir le document",
-    otp_subject: (c: string) => `Code d'accès Signed : ${c}`, otp_title: "Code d'accès",
+    otp_subject: (t: string) => `Code d'accès Signed : ${t}`, otp_title: "Code d'accès",
     otp_use: (t: string) => `Utilisez ce code pour ouvrir le document <strong>${t}</strong> :`,
     otp_valid: "Le code est valable 10 minutes. Si vous ne l'avez pas demandé, ignorez cet e-mail.",
     links_valid: "Les liens sont valables 7 jours.", attached: "Les documents sont en pièce jointe.",
@@ -183,7 +183,8 @@ export function inviteEmail(d: InviteData): { subject: string; html: string } {
 export function otpEmail(name: string, title: string, code: string, o: { lang?: string | null; brand?: Brand | null } = {}): { subject: string; html: string } {
   const t = tx(o.lang);
   return {
-    subject: t.otp_subject(code),
+    // O código nunca vai no assunto: o assunto fica no registo de emails, que o remetente pode ler.
+    subject: t.otp_subject(title),
     html: layout(
       t.otp_title,
       para(esc(t.hello(name))) + para(t.otp_use(esc(title))) +

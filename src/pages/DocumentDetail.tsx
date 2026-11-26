@@ -44,7 +44,9 @@ export function DocumentDetail() {
   const [missing, setMissing] = useState(false);
 
   const load = useCallback(async () => {
-    const { data: d } = await supabase.from("documents").select("*").eq("id", id!).maybeSingle();
+    const { data: d, error: de } = await supabase.from("documents").select("*").eq("id", id!).maybeSingle();
+    // Uma falha de rede não é "não encontrado": mantém o que está no ecrã e tenta no ciclo seguinte.
+    if (de) return;
     if (!d) return setMissing(true);
     const [{ data: r }, { data: ev }, { data: em }, { data: ok }, { data: tb }, { data: at }] = await Promise.all([
       supabase.from("recipients").select(RECIPIENT_COLUMNS).eq("document_id", d.id).order("signing_order").order("created_at"),
@@ -73,11 +75,16 @@ export function DocumentDetail() {
     }
   }, [id]);
 
+  // Atualiza a cada 20 s enquanto o documento está em curso e o separador está visível.
+  const live = !doc || doc.status === "in_progress";
   useEffect(() => {
     load();
-    const t = setInterval(load, 20000);
+    if (!live) return;
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, 20000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, live]);
 
   async function download(path: string | null, name: string) {
     if (!path) return;
@@ -301,9 +308,9 @@ export function DocumentDetail() {
             </div>
             {tab === "history" ? (
               <>
-                <p className={`mt-3 flex items-center gap-1.5 text-xs ${chainOk === false ? "text-red-700" : "text-emerald-700"}`}>
+                <p className={`mt-3 flex items-center gap-1.5 text-xs ${chainOk === false ? "text-red-700" : chainOk ? "text-emerald-700" : "text-slate-500"}`}>
                   <ShieldIcon className="h-4 w-4" />
-                  {chainOk === false ? "Atenção: o registo de auditoria não confere." : "Registo de auditoria íntegro."}
+                  {chainOk === false ? "Atenção: o registo de auditoria não confere." : chainOk ? "Registo de auditoria íntegro." : "Não foi possível verificar o registo de auditoria."}
                 </p>
                 <ol className="mt-3 space-y-2.5">
                   {[...events].reverse().map((e) => (
@@ -353,12 +360,14 @@ function CorrectModal({ open, onClose, doc, recipients, onDone }: { open: boolea
   const [deadline, setDeadline] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Só ao abrir: a atualização automática da página não pode apagar o que se está a escrever.
   useEffect(() => {
     if (!open) return;
     setRows(Object.fromEntries(recipients.map((r) => [r.id, { name: r.name, email: r.email, civil_id: r.civil_id ?? "" }])));
     setDeadline(doc.expires_at ? new Date(doc.expires_at).toISOString().slice(0, 10) : "");
     setError(null);
-  }, [open, recipients, doc.expires_at]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   async function save() {
     setBusy(true);

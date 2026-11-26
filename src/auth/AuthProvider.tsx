@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
@@ -35,16 +35,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Utilizador cujo perfil já está carregado (o Supabase volta a emitir SIGNED_IN ao regressar ao separador).
+  const loadedFor = useRef<string | null>(null);
+
   async function load(s: Session | null) {
     setSession(s);
     if (!s) {
+      loadedFor.current = null;
       setProfile(null);
       setWorkspaces([]);
       setLoading(false);
       return;
     }
+    if (loadedFor.current === s.user.id) return;
     const { data: p, error: pe } = await supabase.from("profiles").select("id, email, full_name, role, active").eq("id", s.user.id).maybeSingle();
-    if (pe || !p) {
+    if (pe) {
+      // Falha de rede: não deita fora a sessão nem o trabalho em curso.
+      if (!loadedFor.current) setError("Não foi possível ligar ao Signed. Verifique a ligação à internet e recarregue a página.");
+      setLoading(false);
+      return;
+    }
+    if (!p) {
       setError("A sua conta não tem acesso ao Signed. Fale com o administrador.");
       setProfile(null);
     } else if (!p.active) {
@@ -53,6 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } else {
       setError(null);
       setProfile(p);
+      loadedFor.current = p.id;
       const { data: ws } = await supabase.from("workspaces").select("id, name, workspace_members(role, user_id)").order("name");
       setWorkspaces(
         (ws ?? []).map((w) => {
@@ -67,6 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => load(data.session));
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      if (event === "USER_UPDATED") loadedFor.current = null;
       if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "USER_UPDATED") load(s);
       else setSession(s);
     });
@@ -81,7 +94,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profile,
         workspaces,
         error,
-        refresh: async () => load((await supabase.auth.getSession()).data.session),
+        refresh: async () => {
+          loadedFor.current = null;
+          await load((await supabase.auth.getSession()).data.session);
+        },
         signOut: async () => {
           await supabase.auth.signOut();
         },

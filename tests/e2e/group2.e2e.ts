@@ -230,7 +230,7 @@ describe("idiomas e marca do hotel", () => {
     expect(st.brand.logoUrl).toContain(path);
     await fn("signer-api", { action: "send-otp", token });
     const { data: otp } = await admin.from("email_log").select("subject").eq("to_email", email).eq("kind", "otp").single();
-    expect(otp!.subject).toMatch(/^Signed access code: \d{6}$/);
+    expect(otp!.subject).toMatch(/^Signed access code: Pool rules$/);
     await owner.from("workspaces").update({ brand_color: null, logo_path: null }).eq("id", ws);
   });
 

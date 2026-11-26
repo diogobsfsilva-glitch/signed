@@ -173,10 +173,11 @@ export function BulkSend() {
           recipients: [{ id: varId, name: row.name, email: row.email, civil_id: row.civilId, ...(row.language ? { language: row.language } : {}) }],
           batchId: batch,
         });
-        for (const [label, value] of Object.entries(row.values)) {
-          const { error } = await supabase.from("fields").update({ value }).eq("document_id", docId).eq("label", label);
-          if (error) throw error;
-        }
+      }
+      // Sempre (também ao repetir): se a primeira tentativa falhou a meio, os valores do CSV ficam completos.
+      for (const [label, value] of Object.entries(row.values)) {
+        const { error } = await supabase.from("fields").update({ value }).eq("document_id", docId).eq("label", label);
+        if (error) throw error;
       }
       await documentAction("send", docId);
       return { state: "sent", docId, sent: true };
@@ -276,7 +277,7 @@ export function BulkSend() {
         <label className={`mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-8 text-center ${started ? "pointer-events-none opacity-60" : "border-slate-300 bg-slate-50 hover:bg-slate-100"}`}>
           <UploadIcon className="h-7 w-7 text-slate-400" />
           <span className="mt-2 text-sm font-medium">{fileName ?? "Escolher ficheiro CSV"}</span>
-          <input type="file" accept=".csv,text/csv" className="sr-only" disabled={started} onChange={(e) => readFile(e.target.files?.[0])} />
+          <input type="file" accept=".csv,text/csv" className="sr-only" disabled={started} onChange={(e) => { readFile(e.target.files?.[0]); e.target.value = ""; }} />
         </label>
         {csvError && <div className="mt-3"><Alert>{csvError}</Alert></div>}
         {warnings.map((w) => <div key={w} className="mt-3"><Alert kind="warning">{w}</Alert></div>)}

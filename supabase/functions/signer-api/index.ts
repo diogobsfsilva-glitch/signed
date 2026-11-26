@@ -2,7 +2,8 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { clientIp, handler, HttpError, json, readJson, userAgent } from "../_shared/http.ts";
-import { advance, audit, brandFor, BUCKET, type Bundle, docFolder, download, fillAutoFields, loadBundle, REASSIGNABLE, reassignRecipient, serviceClient, tokenHash, upload } from "../_shared/engine.ts";
+import { advance, audit, brandFor, BUCKET, type Bundle, docFolder, download, fillAutoFields, loadBundle, REASSIGNABLE, reassignRecipient, serviceClient, tokenHash, upload, withDocLock } from "../_shared/engine.ts";
+import { assertSignaturePng } from "../_shared/pdf.ts";
 import { ccRejectedEmail, declinedEmail, delegatedEmail, deliver, otpEmail } from "../_shared/email.ts";
 import { currentRecipients } from "../_shared/workflow.ts";
 import { validateFieldValues } from "../_shared/workflow.ts";
@@ -14,6 +15,7 @@ import { appUrl, publicUrl } from "../_shared/engine.ts";
 
 const OTP_TTL_MS = 10 * 60_000;
 const OTP_RESEND_MS = 60_000;
+const OTP_MAX_PER_HOUR = 5;
 const SESSION_TTL_MS = 4 * 3600_000;
 
 interface Body {
@@ -146,6 +148,7 @@ Deno.serve(handler(async (req) => {
   const ip = clientIp(req);
   const ua = userAgent(req);
   const r = await findRecipient(sb, body.token);
+  const rid = r.id;
   if (r.role !== "signer") throw new HttpError(403, "Este link é apenas para consulta.", "not_signer");
   let b = await loadBundle(sb, r.document_id);
 
@@ -180,6 +183,16 @@ Deno.serve(handler(async (req) => {
       if (prev && Date.now() - new Date(prev.sent_at).getTime() < OTP_RESEND_MS) {
         throw new HttpError(429, "Aguarde um minuto antes de pedir outro código.", "rate_limited");
       }
+      // Limite global: cada reenvio repõe as 5 tentativas, por isso limita-se também o número de códigos por hora.
+      const { count: sentLastHour } = await sb
+        .from("audit_events")
+        .select("id", { count: "exact", head: true })
+        .eq("recipient_id", r.id)
+        .eq("event", "recipient.otp_sent")
+        .gte("created_at", new Date(Date.now() - 3600_000).toISOString());
+      if ((sentLastHour ?? 0) >= OTP_MAX_PER_HOUR) {
+        throw new HttpError(429, "Pediu demasiados códigos. Tente de novo dentro de uma hora.", "otp_hourly");
+      }
       const code = randomCode();
       await sb.from("signer_otps").upsert({
         recipient_id: r.id,
@@ -190,7 +203,10 @@ Deno.serve(handler(async (req) => {
         member_email: r.group_emails?.length ? to : null,
       });
       const mail = otpEmail(r.name, b.doc.title, code, { lang: r.language, brand: await brandFor(sb, b.doc.workspace_id) });
-      await deliver(sb, { to, subject: mail.subject, html: mail.html, kind: "otp", documentId: b.doc.id, recipientId: r.id });
+      if (!(await deliver(sb, { to, subject: mail.subject, html: mail.html, kind: "otp", documentId: b.doc.id, recipientId: r.id }))) {
+        await sb.from("signer_otps").delete().eq("recipient_id", r.id);
+        throw new HttpError(502, "Não foi possível enviar o código. Tente de novo dentro de momentos.", "email_failed");
+      }
       await audit(sb, b.doc.id, "recipient.otp_sent", { recipientId: r.id, ip, ua, details: r.group_emails?.length ? { member: to } : {} });
       return json({ ok: true, email: maskEmail(to) });
     }
@@ -199,9 +215,18 @@ Deno.serve(handler(async (req) => {
       const { data: otp } = await sb.from("signer_otps").select("*").eq("recipient_id", r.id).maybeSingle();
       if (!otp || new Date(otp.expires_at) < new Date()) throw new HttpError(400, "O código expirou. Peça um novo.", "otp_expired");
       if (otp.attempts >= 5) throw new HttpError(429, "Demasiadas tentativas. Peça um novo código.", "otp_locked");
+      // Cada tentativa consome uma das 5 de forma atómica (comparar-e-trocar): pedidos em paralelo
+      // não conseguem fazer mais comparações do que as permitidas.
+      const { data: claimed } = await sb
+        .from("signer_otps")
+        .update({ attempts: otp.attempts + 1 })
+        .eq("recipient_id", r.id)
+        .eq("attempts", otp.attempts)
+        .eq("code_hash", otp.code_hash)
+        .select("recipient_id");
+      if (!claimed?.length) throw new HttpError(429, "Aguarde um pouco antes de tentar de novo.", "rate_limited");
       const ok = otp.code_hash === (await sha256Hex(`${r.id}:${(body.code ?? "").trim()}`));
       if (!ok) {
-        await sb.from("signer_otps").update({ attempts: otp.attempts + 1 }).eq("recipient_id", r.id);
         await audit(sb, b.doc.id, "recipient.otp_failed", { recipientId: r.id, ip, ua });
         throw new HttpError(400, "Código incorreto.", "otp_wrong");
       }
@@ -263,12 +288,22 @@ Deno.serve(handler(async (req) => {
     }
 
     case "submit": {
+      // Tudo com o documento trancado e relido: duas submissões, ou submeter e rejeitar/cancelar
+      // ao mesmo tempo, já não se cruzam.
+      await withDocLock(sb, b.doc.id, async (b) => {
+      const r = b.recipients.find((x) => x.id === rid);
+      if (!r) throw new HttpError(404, "Este link não é válido ou foi cancelado.", "invalid_link");
       const st = docState(b, r);
       if (st.step !== "sign_simple" && st.step !== "fill") throw new HttpError(409, "Não é possível submeter neste momento.", "wrong_step");
       const editable = st.myFields.filter((f) => isSignerInput(f, b.doc.signature_mode));
       const values = body.values ?? {};
       const errors = validateFieldValues(editable, values);
       if (errors.length) throw new HttpError(422, errors.join(" "), "invalid_values");
+      for (const f of editable.filter((x) => (x.type === "signature" || x.type === "initials") && values[x.id])) {
+        await assertSignaturePng(values[f.id]!).catch(() => {
+          throw new HttpError(422, "A imagem da assinatura não é válida. Desenhe-a ou carregue-a de novo.", "bad_signature");
+        });
+      }
       const attachments = new Map<string, AttachmentValue>();
       for (const f of editable.filter((x) => x.type === "attachment" && values[x.id])) {
         attachments.set(f.id, await attachmentValue(sb, b, r, f, values[f.id]!));
@@ -277,7 +312,8 @@ Deno.serve(handler(async (req) => {
       for (const f of editable) {
         const v = values[f.id];
         const stored = attachments.has(f.id) ? JSON.stringify(attachments.get(f.id)) : v === undefined || v === "" ? null : v;
-        await sb.from("fields").update({ value: stored, filled_at: now }).eq("id", f.id);
+        const { error } = await sb.from("fields").update({ value: stored, filled_at: now }).eq("id", f.id);
+        if (error) throw new Error(`Campo ${f.id}: ${error.message}`);
       }
       for (const a of attachments.values()) {
         await audit(sb, b.doc.id, "recipient.attachment_added", { recipientId: r.id, ip, ua, details: { name: a.name, size: a.size, sha256: a.sha256 } });
@@ -285,27 +321,35 @@ Deno.serve(handler(async (req) => {
       if (b.doc.signature_mode === "simple") await fillAutoFields(sb, b, r, new Date(now));
       const valuesHash = await sha256Hex(JSON.stringify(editable.map((f) => [f.id, values[f.id] ?? null])));
       if (b.doc.signature_mode === "simple") {
-        await sb.from("recipients").update({ status: "signed", signed_at: now, filled_at: now, sign_ip: ip, sign_user_agent: ua, signed_by: sess.member_email }).eq("id", r.id);
+        const { error } = await sb.from("recipients").update({ status: "signed", signed_at: now, filled_at: now, sign_ip: ip, sign_user_agent: ua, signed_by: sess.member_email }).eq("id", r.id);
+        if (error) throw new Error(error.message);
         await audit(sb, b.doc.id, "recipient.signed", {
           recipientId: r.id, ip, ua,
           details: { fields: editable.length, values_sha256: valuesHash, ...(sess.member_email ? { signed_by: sess.member_email } : {}) },
         });
       } else {
-        await sb.from("recipients").update({ status: "filled", filled_at: now }).eq("id", r.id);
+        const { error } = await sb.from("recipients").update({ status: "filled", filled_at: now }).eq("id", r.id);
+        if (error) throw new Error(error.message);
         await audit(sb, b.doc.id, "recipient.filled", { recipientId: r.id, ip, ua, details: { fields: editable.length, values_sha256: valuesHash } });
       }
+      });
       await advance(sb, b.doc.id);
       return json({ ok: true });
     }
 
     case "decline": {
-      if (b.doc.status !== "in_progress" || r.status === "signed") throw new HttpError(409, "Já não é possível rejeitar este documento.", "wrong_step");
       const reason = (body.reason ?? "").trim().slice(0, 1000) || null;
-      const now = new Date().toISOString();
-      await sb.from("recipients").update({ status: "declined", declined_at: now, decline_reason: reason }).eq("id", r.id);
-      await sb.from("documents").update({ status: "declined" }).eq("id", b.doc.id).eq("status", "in_progress");
-      await audit(sb, b.doc.id, "recipient.declined", { recipientId: r.id, ip, ua, details: { reason } });
-      await audit(sb, b.doc.id, "document.declined", { recipientId: r.id });
+      await withDocLock(sb, b.doc.id, async (b) => {
+        const r = b.recipients.find((x) => x.id === rid);
+        if (!r || b.doc.status !== "in_progress" || r.status === "signed" || r.status === "declined") {
+          throw new HttpError(409, "Já não é possível rejeitar este documento.", "wrong_step");
+        }
+        const now = new Date().toISOString();
+        await sb.from("recipients").update({ status: "declined", declined_at: now, decline_reason: reason }).eq("id", r.id);
+        await sb.from("documents").update({ status: "declined" }).eq("id", b.doc.id).eq("status", "in_progress");
+        await audit(sb, b.doc.id, "recipient.declined", { recipientId: r.id, ip, ua, details: { reason } });
+        await audit(sb, b.doc.id, "document.declined", { recipientId: r.id });
+      });
       const mail = declinedEmail(b.owner.full_name || b.owner.email, b.doc.title, r.name, reason, `${appUrl()}/documentos/${b.doc.id}`);
       await deliver(sb, { to: b.owner.email, subject: mail.subject, html: mail.html, kind: "declined", documentId: b.doc.id });
       return json({ ok: true });
@@ -325,9 +369,6 @@ Deno.serve(handler(async (req) => {
     }
 
     case "delegate": {
-      if (b.doc.status !== "in_progress" || !REASSIGNABLE.includes(r.status)) {
-        throw new HttpError(409, "Já não é possível delegar este documento.", "wrong_step");
-      }
       const name = (body.name ?? "").trim();
       const email = (body.email ?? "").trim().toLowerCase();
       const reason = (body.reason ?? "").trim().slice(0, 1000) || null;
@@ -338,8 +379,14 @@ Deno.serve(handler(async (req) => {
         throw new HttpError(422, "Essa pessoa já é destinatária deste documento.", "validation");
       }
       const from = { name: r.name, email: r.email };
-      await reassignRecipient(sb, r, { name, email, civil_id: null });
-      await audit(sb, b.doc.id, "recipient.delegated", { recipientId: r.id, ip, ua, details: { from, to: { name, email }, reason } });
+      await withDocLock(sb, b.doc.id, async (b) => {
+        const cur = b.recipients.find((x) => x.id === rid);
+        if (!cur || b.doc.status !== "in_progress" || !REASSIGNABLE.includes(cur.status)) {
+          throw new HttpError(409, "Já não é possível delegar este documento.", "wrong_step");
+        }
+        await reassignRecipient(sb, cur, { name, email, civil_id: null });
+        await audit(sb, b.doc.id, "recipient.delegated", { recipientId: cur.id, ip, ua, details: { from, to: { name, email }, reason } });
+      });
       const mail = delegatedEmail(b.owner.full_name || b.owner.email, b.doc.title, from.name, name, email, reason, `${appUrl()}/documentos/${b.doc.id}`);
       await deliver(sb, { to: b.owner.email, subject: mail.subject, html: mail.html, kind: "delegated", documentId: b.doc.id });
       await advance(sb, b.doc.id);
@@ -376,7 +423,13 @@ Deno.serve(handler(async (req) => {
         const who = matchSigner(result.signer, { name: r.name, civil_id: r.civil_id }, nameMatches);
         if (!who.ok) throw new VerifyError(who.reason!, "wrong_person");
 
-        // Grava a nova revisão e avança.
+        // Grava a nova revisão com o documento trancado, confirmando que nada mudou durante a validação.
+        const verifiedSha = b.doc.current_sha256;
+        await withDocLock(sb, b.doc.id, async (b) => {
+        const r = b.recipients.find((x) => x.id === rid);
+        if (!r || docState(b, r).step !== "sign_cc" || b.doc.current_sha256 !== verifiedSha) {
+          throw new HttpError(409, "O documento mudou entretanto. Atualize a página.", "wrong_step");
+        }
         const n = b.recipients.filter((x) => x.status === "signed").length + 1;
         const newPath = `${docFolder(b.doc)}/signed-${n}.pdf`;
         await upload(sb, newPath, uploaded);
@@ -409,6 +462,7 @@ Deno.serve(handler(async (req) => {
             chain: result.chain.map((c) => c.commonName),
             timestamps: result.docTimestamps,
           },
+        });
         });
         await advance(sb, b.doc.id);
         b = await loadBundle(sb, b.doc.id);

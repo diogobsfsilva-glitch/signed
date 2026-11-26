@@ -30,6 +30,8 @@ interface Folder {
   workspace_id: string;
 }
 
+const PAGE = 500;
+
 const TABS: { key: string; label: string; statuses: DocStatus[] | null }[] = [
   { key: "all", label: "Todos", statuses: null },
   { key: "progress", label: "Em curso", statuses: ["in_progress"] },
@@ -59,7 +61,8 @@ export function Dashboard() {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   async function bulk(action: "remind" | "cancel") {
-    const ids = [...picked];
+    // Só os selecionados que continuam visíveis com o filtro atual.
+    const ids = [...picked].filter((id) => filtered.some((r) => r.id === id && r.status === "in_progress"));
     if (action === "cancel" && !confirm(`Cancelar ${ids.length} documento(s)? Os links deixam de funcionar.`)) return;
     setBulkBusy(true);
     let ok = 0;
@@ -74,26 +77,42 @@ export function Dashboard() {
     }
     setBulkBusy(false);
     setPicked(new Set());
-    toast(`${ok} ${action === "remind" ? "lembrete(s) enviado(s)" : "documento(s) cancelado(s)"}${errors.length ? `; ${errors.length} com erro` : ""}.`, errors.length ? "error" : "ok");
-    if (errors.length) console.warn(errors);
+    toast(
+      `${ok} ${action === "remind" ? "lembrete(s) enviado(s)" : "documento(s) cancelado(s)"}${errors.length ? `. Com erro: ${errors.slice(0, 3).join("; ")}${errors.length > 3 ? ` e mais ${errors.length - 3}` : ""}` : ""}.`,
+      errors.length ? "error" : "ok",
+    );
     load();
   }
   const nav = useNavigate();
 
-  async function load() {
+  // Carrega por páginas (o servidor devolve no máximo 1000 linhas por pedido).
+  const [pages, setPages] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  async function load(n = pages) {
     const [{ data: docs, error }, { data: f }] = await Promise.all([
       supabase
         .from("documents")
         .select("id, title, status, signature_mode, parts, updated_at, sent_at, owner_id, folder_id, workspace_id, batch_id, public_link_id, recipients(name, role, status), owner:profiles!documents_owner_id_fkey(full_name, email)")
         .eq("is_template", false)
         .order("updated_at", { ascending: false })
-        .limit(500),
+        .range(0, n * PAGE - 1),
       supabase.from("folders").select("id, name, workspace_id").order("name"),
     ]);
-    if (error) toast(errorMessage(error), "error");
+    if (error) {
+      toast(errorMessage(error), "error");
+      setRows((r) => r ?? []);
+      return;
+    }
     setRows((docs as unknown as Row[]) ?? []);
+    setHasMore((docs?.length ?? 0) >= n * PAGE);
     setFolders(f ?? []);
   }
+  async function more() {
+    setPages(pages + 1);
+    await load(pages + 1);
+  }
+  // A seleção não sobrevive a uma mudança de filtro (evita cancelar documentos que já não se veem).
+  useEffect(() => setPicked(new Set()), [tab, folder, batch, linkId, q]);
 
   useEffect(() => {
     load();
@@ -164,19 +183,19 @@ export function Dashboard() {
         </aside>
 
         <section className="min-w-0">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:overflow-visible">
               {TABS.map((t) => (
                 <button
                   key={t.key}
                   onClick={() => set("estado", t.key === "all" ? null : t.key)}
                   className={`whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium ${tab === t.key ? "bg-navy-900 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"}`}
                 >
-                  {t.label} <span className={tab === t.key ? "text-navy-200" : "text-slate-400"}>{counts[t.key]}</span>
+                  {t.label} <span className={tab === t.key ? "text-navy-200" : "text-slate-500"}>{counts[t.key]}{hasMore ? "+" : ""}</span>
                 </button>
               ))}
             </div>
-            <input className="input sm:max-w-60" placeholder="Pesquisar título ou pessoa" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Pesquisar" />
+            <input className="input xl:max-w-60" placeholder="Pesquisar título ou pessoa" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Pesquisar" />
           </div>
           {(batch || linkId) && (
             <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-navy-50 px-3 py-2 text-sm text-navy-900">
@@ -184,14 +203,17 @@ export function Dashboard() {
               <button className="text-navy-600 underline" onClick={() => { const p = new URLSearchParams(params); p.delete("lote"); p.delete("link"); setParams(p, { replace: true }); }}>Ver todos</button>
             </div>
           )}
-          <select className="input mt-3 lg:hidden" value={folder ?? ""} onChange={(e) => set("pasta", e.target.value || null)} aria-label="Pasta">
-            <option value="">Todas as pastas</option>
-            {folders.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.name}
-              </option>
-            ))}
-          </select>
+          <div className="mt-3 flex gap-2 lg:hidden">
+            <select className="input" value={folder ?? ""} onChange={(e) => set("pasta", e.target.value || null)} aria-label="Pasta">
+              <option value="">Todas as pastas</option>
+              {folders.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+            <button className="btn-secondary shrink-0" onClick={() => setNewFolder(true)}>+ Pasta</button>
+          </div>
 
           <div className="mt-4">
             {filtered.length === 0 ? (
@@ -263,6 +285,12 @@ export function Dashboard() {
                   );
                 })}
               </ul>
+              {hasMore && (
+                <div className="mt-3 text-center">
+                  <button className="btn-secondary" onClick={more}>Mostrar mais documentos</button>
+                  <p className="mt-1 text-xs text-slate-500">A lista e a pesquisa incluem os {rows.length} documentos mais recentes.</p>
+                </div>
+              )}
               </>
             )}
           </div>

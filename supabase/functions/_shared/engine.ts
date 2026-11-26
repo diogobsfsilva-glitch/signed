@@ -147,6 +147,7 @@ export async function reassignRecipient(
   const emailChanged = email !== r.email.toLowerCase();
   const patch: Record<string, unknown> = { name: next.name.trim(), email, civil_id: next.civil_id };
   if (email && r.group_emails?.length) patch.group_emails = null; // o grupo passa a ser uma pessoa
+  if (email && r.in_person) patch.in_person = false; // com email, passa a receber o convite
   if (emailChanged) {
     const version = (r.token_version ?? 0) + 1;
     Object.assign(patch, {
@@ -159,8 +160,10 @@ export async function reassignRecipient(
       viewed_at: null,
     });
   }
-  const { error } = await sb.from("recipients").update(patch).eq("id", r.id);
+  // Só altera se o estado não mudou entretanto (ex.: assinou enquanto o remetente corrigia).
+  const { data: done, error } = await sb.from("recipients").update(patch).eq("id", r.id).eq("status", r.status).select("id");
   if (error) throw new Error(error.message);
+  if (!done?.length) throw new HttpError(409, `${r.name} acabou de responder ao documento. Atualize a página.`, "wrong_step");
   if (emailChanged) {
     await sb.from("signer_sessions").delete().eq("recipient_id", r.id);
     await sb.from("signer_otps").delete().eq("recipient_id", r.id);
@@ -263,6 +266,22 @@ async function releaseLock(sb: SupabaseClient, docId: string) {
   await sb.from("documents").update({ processing_lock: null }).eq("id", docId);
 }
 
+/**
+ * Corre uma alteração com o documento trancado: assinar, rejeitar, delegar, corrigir, cancelar e
+ * expirar ficam em série com a conclusão, por isso nunca se decide com dados desatualizados.
+ * A função recebe o documento lido já com o trinco.
+ */
+export async function withDocLock<T>(sb: SupabaseClient, docId: string, fn: (b: Bundle) => Promise<T>): Promise<T> {
+  if (!(await acquireLock(sb, docId))) {
+    throw new HttpError(409, "O documento está a ser atualizado. Tente de novo dentro de momentos.", "busy");
+  }
+  try {
+    return await fn(await loadBundle(sb, docId));
+  } finally {
+    await releaseLock(sb, docId);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Avançar o fluxo
 // ---------------------------------------------------------------------------
@@ -324,8 +343,14 @@ async function notifyCurrent(sb: SupabaseClient, b: Bundle) {
       brand,
       documents: b.doc.parts?.map((x) => x.name),
     });
+    let delivered = 0;
     for (const to of recipientEmails(r)) {
-      await deliver(sb, { to, subject: b.doc.subject || mail.subject, html: mail.html, kind: "invite", documentId: b.doc.id, recipientId: r.id });
+      if (await deliver(sb, { to, subject: b.doc.subject || mail.subject, html: mail.html, kind: "invite", documentId: b.doc.id, recipientId: r.id })) delivered++;
+    }
+    if (!delivered) {
+      // Não marca como notificado: o agendador volta a tentar na hora seguinte e o remetente vê a falha.
+      await audit(sb, b.doc.id, "recipient.notify_failed", { recipientId: r.id, details: { email: recipientEmails(r).join(", ") } });
+      continue;
     }
     await sb
       .from("recipients")
@@ -475,10 +500,18 @@ async function finalize(sb: SupabaseClient, b: Bundle) {
   const auditPath = `${docFolder(doc)}/certificado.pdf`;
   await upload(sb, auditPath, cert);
 
-  await sb
+  // Só conclui se continuar em curso (cancelar e expirar também usam o trinco, mas fica a garantia).
+  const { data: completed, error: ce } = await sb
     .from("documents")
     .update({ status: "completed", completed_at: completedAt, final_path: finalPath, final_sha256: finalHash, audit_path: auditPath })
-    .eq("id", doc.id);
+    .eq("id", doc.id)
+    .eq("status", "in_progress")
+    .select("id");
+  if (ce) throw new Error(`Conclusão: ${ce.message}`);
+  if (!completed?.length) {
+    console.warn(`finalize: ${doc.id} deixou de estar em curso; conclusão anulada`);
+    return;
+  }
 
   // Emails com os documentos
   const base = safeFileName(doc.title);

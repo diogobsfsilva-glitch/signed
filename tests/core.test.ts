@@ -445,7 +445,11 @@ describe("idiomas", () => {
     expect(en.html).toContain('lang="en"');
     expect(en.html).toContain("#7a1f2b");
     expect(en.html).toContain("logo.png");
-    expect(otpEmail("Juan", "Contrato", "123456", { lang: "es" }).subject).toBe("Código de acceso de Signed: 123456");
+    // O código nunca vai no assunto (fica no registo de emails); vai no corpo.
+    const otp = otpEmail("Juan", "Contrato", "123456", { lang: "es" });
+    expect(otp.subject).toBe("Código de acceso de Signed: Contrato");
+    expect(otp.subject).not.toContain("123456");
+    expect(otp.html).toContain("123456");
     expect(completedEmail("Marie", "Contrat", "simple", [], { lang: "fr" }).subject).toBe("Terminé : Contrat");
     // Sem idioma: português e sem marca.
     const pt = inviteEmail({ recipientName: "Ana", senderName: "Diogo", title: "X", message: null, url: "u", mode: "simple", step: "sign", expiresAt: null });
@@ -506,5 +510,40 @@ describe("pacotes de documentos", () => {
       partsSigned: true,
     });
     expect((await PDFDocument.load(bytes)).getPageCount()).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("lote A/B: validações", () => {
+  it("datas que não existem são recusadas", async () => {
+    const { isValidIsoDate } = await import("../supabase/functions/_shared/workflow.ts");
+    expect(isValidIsoDate("2026-02-28")).toBe(true);
+    expect(isValidIsoDate("2028-02-29")).toBe(true);
+    expect(isValidIsoDate("2026-02-31")).toBe(false);
+    expect(isValidIsoDate("2026-13-01")).toBe(false);
+    expect(cellToValue("date", "31/02/2027", null).error).toMatch(/inválida/);
+    expect(cellToValue("date", "28/02/2027", null).value).toBe("2027-02-28");
+    const f = [{ id: "d", type: "date" as const, required: true, options: null, label: "Nascimento" }];
+    expect(validateFieldValues(f, { d: "2026-02-31" })[0]).toMatch(/Data inválida/);
+    // Valores que não são texto (ex.: objetos enviados à mão) são recusados.
+    const t = [{ id: "t", type: "text" as const, required: true, options: null, label: "Cargo" }];
+    expect(validateFieldValues(t, { t: { a: 1 } as unknown as string })[0]).toMatch(/inválido/);
+  });
+
+  it("a assinatura tem de ser um PNG verdadeiro e de tamanho razoável", async () => {
+    const { assertSignaturePng } = await import("../supabase/functions/_shared/pdf.ts");
+    await expect(assertSignaturePng(PNG_1x1)).resolves.toBeUndefined();
+    await expect(assertSignaturePng("data:image/png;base64,AAAA")).rejects.toThrow();
+    // Cabeçalho PNG válido mas largura gigante.
+    const bytes = fromBase64(PNG_1x1.split(",")[1]);
+    new DataView(bytes.buffer, bytes.byteOffset).setUint32(16, 50_000);
+    const big = "data:image/png;base64," + Buffer.from(bytes).toString("base64");
+    await expect(assertSignaturePng(big)).rejects.toThrow(/bad_size/);
+  });
+
+  it("o CSV exportado neutraliza fórmulas do Excel", () => {
+    const out = toCsv([["Nome"], ["=HYPERLINK(\"x\")"], ["+351 912"], ["Ana"]]);
+    expect(out).toContain(`"'=HYPERLINK(""x"")"`);
+    expect(out).toContain("'+351 912");
+    expect(out).toContain("\r\nAna\r\n");
   });
 });

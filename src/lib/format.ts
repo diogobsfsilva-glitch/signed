@@ -1,4 +1,4 @@
-const dt = new Intl.DateTimeFormat("pt-PT", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Lisbon" });
+const dt = new Intl.DateTimeFormat("pt-PT", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Lisbon" });
 const d = new Intl.DateTimeFormat("pt-PT", { dateStyle: "medium", timeZone: "Europe/Lisbon" });
 
 export const fmtDateTime = (s?: string | null) => (s ? dt.format(new Date(s)) : "—");
@@ -10,6 +10,7 @@ export function relative(s?: string | null): string {
   if (diff < 60) return "agora mesmo";
   if (diff < 3600) return `há ${Math.floor(diff / 60)} min`;
   if (diff < 86400) return `há ${Math.floor(diff / 3600)} h`;
+  if (diff < 2 * 86400) return "ontem";
   if (diff < 7 * 86400) return `há ${Math.floor(diff / 86400)} dias`;
   return fmtDate(s);
 }

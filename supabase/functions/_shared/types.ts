@@ -252,6 +252,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "document.archived": "Arquivado no SharePoint",
   "document.archive_failed": "Falha ao arquivar no SharePoint",
   "recipient.notified": "Convite enviado",
+  "recipient.notify_failed": "Falha ao enviar o convite (nova tentativa dentro de uma hora)",
   "recipient.reminded": "Lembrete enviado",
   "recipient.otp_sent": "Código de acesso enviado",
   "recipient.otp_failed": "Código de acesso errado",

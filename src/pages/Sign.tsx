@@ -66,9 +66,11 @@ export function Sign() {
   const [info, setInfo] = useState<LoadInfo | null>(null);
   const [finished, setFinished] = useState<null | "signed" | "filled" | "declined" | "delegated">(null);
   // Idioma: o escolhido pela pessoa nesta página, senão o definido pelo remetente, senão o do navegador.
+  // Guardado só para este link e este separador: num tablet partilhado, o hóspede seguinte não o herda.
+  const langKey = `signed:lang:${token}`;
   const [chosen, setChosen] = useState<Lang | null>(() => {
     try {
-      const v = localStorage.getItem("signed:lang");
+      const v = sessionStorage.getItem(langKey);
       return isLang(v) ? v : null;
     } catch {
       return null;
@@ -79,7 +81,7 @@ export function Sign() {
   function pickLang(l: Lang) {
     setChosen(l);
     try {
-      localStorage.setItem("signed:lang", l);
+      sessionStorage.setItem(langKey, l);
     } catch {
       /* ignorar */
     }
@@ -332,12 +334,9 @@ function Flow({ token, session, info, reload, onFinished, inPerson }: { token: s
 function FillAndSign({ token, session, info, onFinished }: { token: string; session: string; info: LoadInfo; onFinished: (k: "signed" | "filled") => void }) {
   const interactive = info.step === "sign_simple" || info.step === "fill";
   const [values, setValues] = useState<Record<string, string>>(() => {
+    // As datas começam vazias: preencher "hoje" fazia uma data de nascimento obrigatória passar sem ser preenchida.
     const v: Record<string, string> = {};
-    const today = new Date().toISOString().slice(0, 10);
-    for (const f of info.fields) {
-      if (f.value) v[f.id] = f.value;
-      else if (f.type === "date" && f.editable) v[f.id] = today;
-    }
+    for (const f of info.fields) if (f.value) v[f.id] = f.value;
     return v;
   });
   // Anexos carregados nesta sessão: id do campo -> nome do ficheiro (para mostrar).
@@ -572,7 +571,7 @@ function AttachmentField({ f, box, style, fs, fileName, token, session, onFile }
   }
   return (
     <label data-field={f.id} className={`${box} flex cursor-pointer items-center justify-center gap-1 px-1`} style={style} title={error ?? f.label ?? "Anexo"}>
-      <input type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" className="sr-only" onChange={(e) => pick(e.target.files?.[0])} disabled={busy} />
+      <input type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" className="sr-only" onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} disabled={busy} />
       <span className="truncate font-semibold" style={{ fontSize: Math.min(fs, 12), color: error ? "#b91c1c" : undefined }}>
         {busy ? t("uploading") : error ? `⚠ ${error}` : fileName ? `📎 ${fileName}` : `📎 ${f.label || t("attach_file")}${f.required ? " *" : ""}`}
       </span>

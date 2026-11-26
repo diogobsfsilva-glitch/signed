@@ -126,7 +126,7 @@ export async function buildAuditCertificate(input: AuditCertificateInput): Promi
   const mode =
     input.document.signature_mode === "qualified"
       ? "Assinatura eletrónica qualificada com Cartão de Cidadão / Chave Móvel Digital (eIDAS, art. 25.º n.º 2)"
-      : "Assinatura eletrónica simples, com verificação do email por código";
+      : "Assinatura eletrónica simples (o método de verificação de cada signatário está indicado abaixo)";
   w.kv("ID do documento", input.document.id);
   w.kv("Tipo de assinatura", mode);
   w.kv("Remetente", `${input.owner.name} <${input.owner.email}>`);
@@ -161,6 +161,11 @@ export async function buildAuditCertificate(input: AuditCertificateInput): Promi
   for (const r of sorted) {
     w.text(r.email ? `${r.name} <${r.email}>` : r.name, { bold: true, size: 10 });
     if (r.in_person) w.kv("Assinatura", "Presencial, no dispositivo de um colaborador (ver histórico)");
+    else if (r.role === "signer" && input.document.signature_mode === "simple") {
+      const has = (ev: string) => input.events.some((e) => e.recipient_id === r.id && e.event === ev);
+      if (has("recipient.authenticated")) w.kv("Verificação", "Email confirmado com código de 6 dígitos");
+      else if (has("recipient.public_access")) w.kv("Verificação", "Formulário público, sem confirmação do email");
+    }
     if (r.group_emails?.length) w.kv("Grupo", r.group_emails.join(", "));
     if (r.signed_by) w.kv("Assinado por", r.signed_by);
     w.kv("Papel", r.role === "signer" ? `Signatário (ordem ${r.signing_order})` : "Recebe cópia");

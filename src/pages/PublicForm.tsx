@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { publicForm, rememberSignerSession } from "../lib/api";
 import { Alert, FullPageSpinner, IdIcon, Logo, Spinner } from "../components/ui";
 import { BrandMark, brandStyle, type BrandInfo } from "../components/Brand";
-import { browserLang, I18n, isLang, LANGS, translator, type Lang } from "../lib/signer-i18n";
+import { browserLang, I18n, LANGS, translator, type Lang } from "../lib/signer-i18n";
 
 interface Info {
   title: string;
@@ -25,23 +25,12 @@ export function PublicForm() {
   const [agree, setAgree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lang, setLang] = useState<Lang>(() => {
-    try {
-      const v = localStorage.getItem("signed:lang");
-      return isLang(v) ? v : browserLang();
-    } catch {
-      return browserLang();
-    }
-  });
+  // Sem memória entre pessoas: num quiosque, cada pessoa começa no idioma do navegador.
+  const [lang, setLang] = useState<Lang>(browserLang);
   const tr = useMemo(() => translator(lang), [lang]);
   const { t } = tr;
   function pickLang(l: Lang) {
     setLang(l);
-    try {
-      localStorage.setItem("signed:lang", l);
-    } catch {
-      /* ignorar */
-    }
   }
 
   useEffect(() => {

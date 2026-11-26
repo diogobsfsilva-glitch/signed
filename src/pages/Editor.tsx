@@ -35,6 +35,7 @@ export function Editor() {
   const [saving, setSaving] = useState(0);
   const [review, setReview] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const [readOnly, setReadOnly] = useState(false);
   const [restructuring, setRestructuring] = useState<string | null>(null);
 
   const track = useCallback(async <T,>(p: PromiseLike<{ error: unknown } & T>): Promise<T & { error: unknown }> => {
@@ -53,6 +54,9 @@ export function Editor() {
       const { data: d } = await supabase.from("documents").select("*").eq("id", id!).maybeSingle();
       if (!d) return setNotFound(true);
       if (d.status !== "draft") return nav(`/documentos/${d.id}`, { replace: true });
+      // Um administrador vê rascunhos de outros, mas não os pode alterar (as gravações seriam ignoradas).
+      const { data: canEdit } = await supabase.rpc("can_edit_draft", { doc: d.id });
+      if (canEdit === false) return setReadOnly(true);
       const [{ data: r }, { data: f }, { data: url }] = await Promise.all([
         supabase.from("recipients").select("id, name, email, role, signing_order, civil_id, color, status, in_person, language, group_emails").eq("document_id", d.id).order("signing_order").order("created_at"),
         supabase.from("fields").select("id, recipient_id, type, page, x, y, w, h, required, label, options, group_name, value, readonly").eq("document_id", d.id),
@@ -161,17 +165,33 @@ export function Editor() {
   }
 
   const pending = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  // Alterações por gravar de cada campo, acumuladas: mudar duas propriedades seguidas grava as duas.
+  const pendingPatch = useRef(new Map<string, Partial<F>>());
   const fieldsRef = useRef(fields);
   fieldsRef.current = fields;
+  const flushField = useCallback((fid: string) => {
+    clearTimeout(pending.current.get(fid));
+    pending.current.delete(fid);
+    const p = pendingPatch.current.get(fid);
+    pendingPatch.current.delete(fid);
+    if (p) track(supabase.from("fields").update(p).eq("id", fid));
+  }, [track]);
   function updateField(fid: string, patch: Partial<F>, immediate = false) {
     setFields((x) => x.map((f) => (f.id === fid ? { ...f, ...patch } : f)));
-    const run = () => track(supabase.from("fields").update(patch).eq("id", fid));
+    pendingPatch.current.set(fid, { ...(pendingPatch.current.get(fid) ?? {}), ...patch });
     clearTimeout(pending.current.get(fid));
-    if (immediate) run();
-    else pending.current.set(fid, setTimeout(run, 400));
+    if (immediate) flushField(fid);
+    else pending.current.set(fid, setTimeout(() => flushField(fid), 400));
   }
+  // Ao sair do editor, grava o que ainda estiver pendente.
+  useEffect(() => () => {
+    for (const fid of [...pendingPatch.current.keys()]) flushField(fid);
+  }, [flushField]);
 
   async function deleteField(fid: string) {
+    clearTimeout(pending.current.get(fid));
+    pending.current.delete(fid);
+    pendingPatch.current.delete(fid);
     setFields((x) => x.filter((f) => f.id !== fid));
     setSelected(null);
     await track(supabase.from("fields").delete().eq("id", fid));
@@ -181,7 +201,8 @@ export function Editor() {
     const h = (e: KeyboardEvent) => {
       if (!selected) return;
       const t = e.target as HTMLElement;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)) return;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable) return;
+      if (document.querySelector('[role="dialog"]')) return; // há uma janela aberta por cima
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         deleteField(selected);
@@ -225,6 +246,14 @@ export function Editor() {
   }
 
   if (notFound) return <div className="p-8"><Alert>Documento não encontrado.</Alert></div>;
+  if (readOnly) {
+    return (
+      <div className="mx-auto max-w-xl p-8">
+        <Alert kind="info">Este rascunho é de outro colaborador. Só quem o criou o pode editar e enviar.</Alert>
+        <Link to="/" className="btn-secondary mt-4 inline-flex">← Documentos</Link>
+      </div>
+    );
+  }
   if (!doc) return <FullPageSpinner />;
   const isTemplate = doc.is_template;
   const home = isTemplate ? "/modelos" : "/";
@@ -411,7 +440,7 @@ export function Editor() {
                       )}
                     </div>
                     {selectedField && (
-                      <FieldProps field={selectedField} signers={signers} qualified={doc.signature_mode === "qualified"} onChange={(p, now) => updateField(selectedField.id, p, now)} onDelete={() => deleteField(selectedField.id)} />
+                      <FieldProps key={selectedField.id} field={selectedField} signers={signers} qualified={doc.signature_mode === "qualified"} onChange={(p, now) => updateField(selectedField.id, p, now)} onDelete={() => deleteField(selectedField.id)} />
                     )}
                   </>
                 )}
@@ -765,6 +794,9 @@ function PackagePanel({ parts, isPackage, busy, fieldsPerPart, onAdd, onRename, 
   onMove: (i: number, d: -1 | 1) => void;
   onRemove: (i: number) => void;
 }) {
+  // Nomes controlados localmente: renomear não volta a montar a linha (o clique seguinte não se perde).
+  const [names, setNames] = useState(parts.map((p) => p.name));
+  useEffect(() => setNames(parts.map((p) => p.name)), [parts]);
   return (
     <section>
       <p className="label">Documentos</p>
@@ -773,10 +805,18 @@ function PackagePanel({ parts, isPackage, busy, fieldsPerPart, onAdd, onRename, 
           <p className="mb-2 text-xs text-slate-500">Pacote assinado de uma só vez. No fim, cada documento fica também disponível em separado.</p>
           <ol className="divide-y divide-slate-100 rounded-lg border border-slate-200">
             {parts.map((p, i) => (
-              <li key={`${i}-${p.name}`} className="flex items-center gap-1 px-2 py-1.5">
+              <li key={i} className="flex items-center gap-1 px-2 py-1.5">
                 <a href={`#parte-${i + 1}`} className="w-5 shrink-0 text-right text-xs font-medium text-slate-400 tabular-nums hover:text-navy-700" title="Ir para o documento">{i + 1}</a>
                 <div className="min-w-0 flex-1">
-                  <input className="input py-1 text-sm" defaultValue={p.name} maxLength={150} aria-label={`Nome do documento ${i + 1}`} onBlur={(e) => onRename(i, e.target.value)} disabled={!!busy} />
+                  <input
+                    className="input py-1 text-sm"
+                    value={names[i] ?? ""}
+                    maxLength={150}
+                    aria-label={`Nome do documento ${i + 1}`}
+                    onChange={(e) => setNames(names.map((n, k) => (k === i ? e.target.value : n)))}
+                    onBlur={() => (names[i]?.trim() ? onRename(i, names[i]) : setNames(parts.map((x) => x.name)))}
+                    disabled={!!busy}
+                  />
                   <p className="mt-0.5 text-[11px] text-slate-500">{p.pages} {p.pages === 1 ? "página" : "páginas"} · {fieldsPerPart[i]} {fieldsPerPart[i] === 1 ? "campo" : "campos"}</p>
                 </div>
                 <button className="btn-ghost px-1" onClick={() => onMove(i, -1)} disabled={i === 0 || !!busy} aria-label="Subir"><ArrowUp className="h-3.5 w-3.5" /></button>

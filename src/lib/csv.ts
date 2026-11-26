@@ -1,6 +1,7 @@
 // CSV para o envio em massa: leitura tolerante ao Excel português (";", BOM, aspas, CRLF)
 // e conversão das colunas em valores de campos.
 import type { FieldType } from "../../supabase/functions/_shared/types";
+import { isValidIsoDate } from "../../supabase/functions/_shared/workflow";
 
 /** Lê um CSV e devolve as linhas (a primeira é o cabeçalho). Deteta ";", "," ou tabulação. */
 export function parseCsv(text: string): string[][] {
@@ -43,7 +44,12 @@ export function parseCsv(text: string): string[][] {
 
 /** Escreve um CSV com ";" (abre bem no Excel em português). */
 export function toCsv(rows: string[][]): string {
-  const esc = (v: string) => (/[";\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  // Células começadas por = + - @ seriam fórmulas no Excel (nomes vindos de links públicos são de anónimos).
+  const safe = (v: string) => (/^[=+\-@\t\r]/.test(v) ? `'${v}` : v);
+  const esc = (raw: string) => {
+    const v = safe(raw);
+    return /[";\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+  };
   return "\uFEFF" + rows.map((r) => r.map(esc).join(";")).join("\r\n") + "\r\n";
 }
 
@@ -107,10 +113,10 @@ export function cellToValue(type: FieldType, raw: string, options: string[] | nu
       let m = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(v);
       if (m) {
         const iso = `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
-        return isNaN(Date.parse(iso)) ? { value: null, error: `data inválida «${v}»` } : { value: iso };
+        return !isValidIsoDate(iso) ? { value: null, error: `data inválida «${v}»` } : { value: iso };
       }
       m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-      return m && !isNaN(Date.parse(v)) ? { value: v } : { value: null, error: `data inválida «${v}» (use dd/mm/aaaa)` };
+      return m && isValidIsoDate(v) ? { value: v } : { value: null, error: `data inválida «${v}» (use dd/mm/aaaa)` };
     }
     case "checkbox": {
       const k = normalizeKey(v);

@@ -388,7 +388,7 @@ function BrandSettings({ ws, onChange }: { ws: Ws; onChange: () => void }) {
             <div className="flex flex-wrap items-center gap-2">
               <label className="btn-secondary cursor-pointer">
                 {busy ? <Spinner className="h-4 w-4" /> : null} Carregar logótipo
-                <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(e) => upload(e.target.files?.[0])} disabled={busy} />
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(e) => { upload(e.target.files?.[0]); e.target.value = ""; }} disabled={busy} />
               </label>
               {ws.logo_path && <button className="btn-ghost text-red-700" disabled={busy} onClick={async () => { await supabase.storage.from("branding").remove([ws.logo_path!]); await save({ logo_path: null }); }}>Remover</button>}
             </div>

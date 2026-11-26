@@ -46,18 +46,28 @@ export function Reports() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [days, setDays] = useState(30);
 
+  // Lê tudo por páginas de 1000 (o limite do servidor por pedido), até 20 000 documentos.
   useEffect(() => {
-    supabase
-      .from("documents")
-      .select("id, title, status, signature_mode, created_at, sent_at, completed_at, expires_at, workspace:workspaces(name), owner:profiles!documents_owner_id_fkey(full_name, email), recipients(name, role, status, signed_at)")
-      .eq("is_template", false)
-      .neq("status", "draft")
-      .order("sent_at", { ascending: false })
-      .limit(5000)
-      .then(({ data, error }) => {
-        if (error) toast(errorMessage(error), "error");
-        setRows((data as unknown as Row[]) ?? []);
-      });
+    (async () => {
+      const all: Row[] = [];
+      for (let from = 0; from < 20_000; from += 1000) {
+        const { data, error } = await supabase
+          .from("documents")
+          .select("id, title, status, signature_mode, created_at, sent_at, completed_at, expires_at, workspace:workspaces(name), owner:profiles!documents_owner_id_fkey(full_name, email), recipients(name, role, status, signed_at)")
+          .eq("is_template", false)
+          .neq("status", "draft")
+          .order("sent_at", { ascending: false })
+          .order("id")
+          .range(from, from + 999);
+        if (error) {
+          toast(errorMessage(error), "error");
+          break;
+        }
+        all.push(...((data as unknown as Row[]) ?? []));
+        if ((data?.length ?? 0) < 1000) break;
+      }
+      setRows(all);
+    })();
   }, []);
 
   const r = useMemo(() => {

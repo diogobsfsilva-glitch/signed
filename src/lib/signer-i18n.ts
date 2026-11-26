@@ -130,6 +130,13 @@ const pt = {
   e_network: "Sem ligação ao servidor. Verifique a internet e tente de novo.",
   group_intro: "Este documento pode ser assinado por qualquer pessoa de {name}. Escolha o seu email para receber o código:",
   e_member_required: "Escolha o seu email.",
+  e_bad_signature: "A imagem da assinatura não é válida. Desenhe-a ou carregue-a de novo.",
+  e_otp_hourly: "Pediu demasiados códigos. Tente de novo dentro de uma hora.",
+  e_email_failed: "Não foi possível enviar o código. Tente de novo dentro de momentos.",
+  e_busy: "O documento está a ser atualizado. Tente de novo dentro de momentos.",
+  e_invalid_values: "Há campos com valores inválidos. Verifique-os e tente de novo.",
+  e_validation: "Verifique os dados indicados e tente de novo.",
+  e_generic: "Não foi possível concluir. Tente de novo ou contacte quem lhe enviou o documento.",
 };
 export type Dict = typeof pt;
 
@@ -253,6 +260,13 @@ const en: Dict = {
   e_network: "No connection to the server. Check your internet and try again.",
   group_intro: "This document can be signed by anyone in {name}. Choose your email to receive the code:",
   e_member_required: "Choose your email.",
+  e_bad_signature: "The signature image is not valid. Please draw or upload it again.",
+  e_otp_hourly: "Too many codes requested. Please try again in an hour.",
+  e_email_failed: "The code could not be sent. Please try again in a moment.",
+  e_busy: "The document is being updated. Please try again in a moment.",
+  e_invalid_values: "Some fields have invalid values. Please check them and try again.",
+  e_validation: "Please check the details you entered and try again.",
+  e_generic: "This could not be completed. Please try again or contact the sender.",
 };
 
 const es: Dict = {
@@ -375,6 +389,13 @@ const es: Dict = {
   e_network: "Sin conexión con el servidor. Compruebe internet e inténtelo de nuevo.",
   group_intro: "Este documento lo puede firmar cualquier persona de {name}. Elija su correo para recibir el código:",
   e_member_required: "Elija su correo.",
+  e_bad_signature: "La imagen de la firma no es válida. Dibújela o cárguela de nuevo.",
+  e_otp_hourly: "Ha pedido demasiados códigos. Inténtelo de nuevo dentro de una hora.",
+  e_email_failed: "No se ha podido enviar el código. Inténtelo de nuevo en unos momentos.",
+  e_busy: "El documento se está actualizando. Inténtelo de nuevo en unos momentos.",
+  e_invalid_values: "Hay campos con valores no válidos. Revíselos e inténtelo de nuevo.",
+  e_validation: "Revise los datos indicados e inténtelo de nuevo.",
+  e_generic: "No se ha podido completar. Inténtelo de nuevo o contacte con el remitente.",
 };
 
 const fr: Dict = {
@@ -497,6 +518,13 @@ const fr: Dict = {
   e_network: "Pas de connexion au serveur. Vérifiez internet et réessayez.",
   group_intro: "Ce document peut être signé par n'importe quelle personne de {name}. Choisissez votre e-mail pour recevoir le code :",
   e_member_required: "Choisissez votre e-mail.",
+  e_bad_signature: "L'image de la signature n'est pas valide. Dessinez-la ou importez-la à nouveau.",
+  e_otp_hourly: "Trop de codes demandés. Réessayez dans une heure.",
+  e_email_failed: "Le code n'a pas pu être envoyé. Réessayez dans quelques instants.",
+  e_busy: "Le document est en cours de mise à jour. Réessayez dans quelques instants.",
+  e_invalid_values: "Certains champs contiennent des valeurs non valides. Vérifiez-les et réessayez.",
+  e_validation: "Vérifiez les informations saisies et réessayez.",
+  e_generic: "L'opération n'a pas pu aboutir. Réessayez ou contactez l'expéditeur.",
 };
 
 export const DICTS: Record<Lang, Dict> = { pt, en, es, fr };
@@ -537,7 +565,11 @@ export function translator(lang: Lang): Translator {
     const err = e as { code?: string; status?: number; message?: string };
     if (err?.status === 0) return d.e_network;
     const key = `e_${err?.code ?? ""}` as keyof Dict;
+    // Em português, a mensagem do servidor é a mais precisa (ex.: qual o campo em falta).
+    if (lang === "pt" && err?.message && err.code !== "network") return err.message;
     if (err?.code && key in d) return d[key];
+    // Noutros idiomas, nunca mostrar texto em português vindo do servidor.
+    if (lang !== "pt") return d.e_generic;
     return err?.message ?? String(e);
   };
   return { lang, t, tn, field, error };

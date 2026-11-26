@@ -269,3 +269,21 @@ export async function extractPages(pdfBytes: Uint8Array, from: number, to: numbe
   for (const p of await out.copyPages(src, idx)) out.addPage(p);
   return await out.save();
 }
+
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+/** Dimensão máxima de uma imagem de assinatura (px). */
+export const MAX_SIGNATURE_PX = 3000;
+
+/**
+ * Confirma que uma assinatura é um PNG que o pdf-lib consegue usar, com dimensões razoáveis.
+ * Sem isto, uma imagem corrompida só falharia na conclusão e o documento ficaria preso.
+ */
+export async function assertSignaturePng(dataUrl: string): Promise<void> {
+  const bytes = fromBase64(dataUrl.replace(/^data:image\/png;base64,/, ""));
+  if (bytes.length < 33 || PNG_MAGIC.some((b, i) => bytes[i] !== b)) throw new Error("not_png");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const w = view.getUint32(16);
+  const h = view.getUint32(20);
+  if (!w || !h || w > MAX_SIGNATURE_PX || h > MAX_SIGNATURE_PX) throw new Error("bad_size");
+  await (await PDFDocument.create()).embedPng(bytes);
+}
