@@ -8,7 +8,7 @@ import { allSigned, currentRecipients, fillPhaseDone, validateForSend } from "./
 import { assertValidPdf, extractPages, flattenFields } from "./pdf.ts";
 import { loadSealKey, type SealKey, sealPdf } from "./pades-sign.ts";
 import { buildAuditCertificate } from "./audit-cert.ts";
-import { type Brand, completedEmail, deliver, inviteEmail } from "./email.ts";
+import { type Brand, completedEmail, deliver, inviteEmail, signedNotifyEmail } from "./email.ts";
 import { m365Config, uploadToSharePoint } from "./m365.ts";
 import { randomToken, sha256Hex, toBase64 } from "./util.ts";
 import { env, HttpError } from "./http.ts";
@@ -64,12 +64,13 @@ export async function signerUrl(r: { id: string; token_version?: number | null }
 }
 
 /** Cria uma sessão de signatário (depois do código por email, presencial ou link público). */
-export async function createSignerSession(sb: SupabaseClient, recipientId: string, ttlMs: number): Promise<string> {
+export async function createSignerSession(sb: SupabaseClient, recipientId: string, ttlMs: number, memberEmail: string | null = null): Promise<string> {
   const session = randomToken();
   const { error } = await sb.from("signer_sessions").insert({
     recipient_id: recipientId,
     token_hash: await sha256Hex(`session:${session}`),
     expires_at: new Date(Date.now() + ttlMs).toISOString(),
+    member_email: memberEmail,
   });
   if (error) throw new Error(error.message);
   return session;
@@ -592,5 +593,21 @@ async function archive(sb: SupabaseClient, doc: DocumentRow, files: { name: stri
     const msg = String((e as Error).message ?? e).slice(0, 500);
     await sb.from("documents").update({ archive_error: msg }).eq("id", doc.id);
     await audit(sb, doc.id, "document.archive_failed", { details: { error: msg } });
+  }
+}
+
+/** Avisa o remetente de que alguém assinou (se o documento ainda não terminou e o aviso estiver ligado). */
+export async function notifyOwnerSigned(sb: SupabaseClient, docId: string, recipientId: string): Promise<void> {
+  try {
+    const b = await loadBundle(sb, docId);
+    if (b.doc.status !== "in_progress" || b.doc.notify_owner === false) return;
+    const r = b.recipients.find((x) => x.id === recipientId);
+    if (!r) return;
+    const signers = b.recipients.filter((x) => x.role === "signer");
+    const done = signers.filter((x) => x.status === "signed").length;
+    const mail = signedNotifyEmail(ownerName(b), b.doc.title, r.signed_by ? `${r.name} (${r.signed_by})` : r.name, done, signers.length, `${appUrl()}/documentos/${docId}`);
+    await deliver(sb, { to: b.owner.email, subject: mail.subject, html: mail.html, kind: "owner_signed", documentId: docId, recipientId });
+  } catch (e) {
+    console.error("notifyOwnerSigned", e);
   }
 }

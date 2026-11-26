@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
-import { ChartIcon, InboxIcon, LinkIcon, Logo, LogoutIcon, MenuIcon, PlusIcon, SettingsIcon, TemplateIcon } from "./ui";
+import { ChartIcon, InboxIcon, LinkIcon, Logo, LogoutIcon, MenuIcon, Modal, PlusIcon, SettingsIcon, TemplateIcon, toast } from "./ui";
 
 export function Layout() {
-  const { profile, signOut } = useAuth();
+  const { profile, signOut, refresh } = useAuth();
+  const [prefs, setPrefs] = useState(false);
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
   const [testMode, setTestMode] = useState(false);
@@ -55,9 +56,32 @@ export function Layout() {
           <p className="truncate text-sm font-medium text-white">{profile?.full_name}</p>
           <p className="truncate text-xs text-navy-200">{profile?.email}</p>
         </div>
+        <button className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-navy-100 hover:bg-white/5 hover:text-white" onClick={() => setPrefs(true)}>
+          <SettingsIcon className="h-4.5 w-4.5" /> Preferências
+        </button>
         <button className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-navy-100 hover:bg-white/5 hover:text-white" onClick={signOut}>
           <LogoutIcon className="h-4.5 w-4.5" /> Sair
         </button>
+        <Modal open={prefs} onClose={() => setPrefs(false)} title="Preferências">
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={profile?.weekly_digest ?? true}
+              onChange={async (e) => {
+                const { error } = await supabase.from("profiles").update({ weekly_digest: e.target.checked }).eq("id", profile!.id);
+                if (error) toast(error.message, "error");
+                else await refresh();
+              }}
+            />
+            <span>
+              <span className="font-medium">Resumo semanal por email</span>
+              <span className="block text-xs text-slate-500">À segunda-feira de manhã: os seus documentos em curso, quem falta assinar e os contratos a terminar nos próximos 30 dias.</span>
+            </span>
+          </label>
+          <p className="mt-4 text-xs text-slate-500">Os avisos de cada assinatura ligam-se e desligam-se nas opções de cada documento.</p>
+          <div className="mt-5 flex justify-end"><button className="btn-primary" onClick={() => setPrefs(false)}>Fechar</button></div>
+        </Modal>
       </div>
     </div>
   );

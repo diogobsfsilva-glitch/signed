@@ -44,6 +44,10 @@ export const correctDocument = (
 export const inPersonSession = (document_id: string, recipient_id: string) =>
   call<{ token: string; session: string }>("document-actions", { action: "in_person", document_id, recipient_id }, true);
 
+/** Abre um pedido de assinatura dirigido ao colaborador com sessão (sem código: o login Microsoft confirma o email). */
+export const signAsMe = (document_id: string, recipient_id: string) =>
+  call<{ token: string; session: string }>("document-actions", { action: "sign-as-me", document_id, recipient_id }, true);
+
 /** Formulário público (link ou QR): sem sessão de colaborador. */
 export const publicForm = <T,>(body: Record<string, unknown>) => call<T>("public-form", body, false);
 

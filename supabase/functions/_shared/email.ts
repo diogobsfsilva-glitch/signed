@@ -321,3 +321,79 @@ export async function deliver(sb: SupabaseClient, m: DeliverInput): Promise<bool
   });
   return status === "sent" || status === "skipped";
 }
+
+// ---------------------------------------------------------------------------
+// Emails internos ao remetente (sempre em português)
+// ---------------------------------------------------------------------------
+export function signedNotifyEmail(ownerName: string, title: string, who: string, done: number, total: number, url: string) {
+  return {
+    subject: `${who} assinou: ${title}`,
+    html: layout(
+      "Nova assinatura",
+      para(`Olá ${esc(ownerName)},`) +
+        para(`<strong>${esc(who)}</strong> assinou o documento <strong>${esc(title)}</strong>. Já assinaram ${done} de ${total}.`) +
+        para("Quando todos assinarem, recebe o documento final e o certificado."),
+      { label: "Ver documento", url },
+      "Pode desligar estes avisos nas opções de cada documento.",
+    ),
+  };
+}
+
+export function renewalEmail(ownerName: string, title: string, end: string, daysLeft: number, url: string) {
+  const when = daysLeft < 0 ? `terminou a ${end}` : daysLeft === 0 ? "termina hoje" : daysLeft === 1 ? "termina amanhã" : `termina a ${end} (daqui a ${daysLeft} dias)`;
+  return {
+    subject: `Fim de contrato: ${title}`,
+    html: layout(
+      "Contrato a terminar",
+      para(`Olá ${esc(ownerName)},`) +
+        para(`O documento <strong>${esc(title)}</strong> ${esc(when)}.`) +
+        para("Se for para renovar, este é o momento de preparar a nova versão. No Signed pode usar «Duplicar» para partir do documento atual."),
+      { label: "Ver documento", url },
+    ),
+  };
+}
+
+export function scheduleFailedEmail(ownerName: string, title: string, reason: string, url: string) {
+  return {
+    subject: `Envio agendado falhou: ${title}`,
+    html: layout(
+      "O envio agendado não foi feito",
+      para(`Olá ${esc(ownerName)},`) +
+        para(`O documento <strong>${esc(title)}</strong> estava agendado, mas não foi possível enviá-lo:`) +
+        quote(reason) +
+        para("O documento continua em rascunho. Corrija o que falta e envie (ou agende) de novo."),
+      { label: "Abrir rascunho", url },
+    ),
+  };
+}
+
+export interface DigestItem {
+  title: string;
+  url: string;
+  waiting: string;
+  days: number;
+}
+
+export function digestEmail(name: string, items: DigestItem[], expiring: DigestItem[], dashboard: string) {
+  const row = (i: DigestItem, extra: string) =>
+    `<tr><td style="padding:8px 0;border-top:1px solid #e2e8f0"><a href="${esc(i.url)}" style="color:#0f2445;font-weight:600;text-decoration:none">${esc(i.title)}</a>` +
+    `<div style="color:#64748b;font-size:13px">${esc(extra)}</div></td></tr>`;
+  let body = para(`Olá ${esc(name)},`);
+  if (items.length) {
+    body += para(`Tem <strong>${items.length}</strong> ${items.length === 1 ? "documento em curso" : "documentos em curso"}:`);
+    body += `<table role="presentation" width="100%" style="border-collapse:collapse;margin:0 0 16px">${
+      items.slice(0, 25).map((i) => row(i, `À espera de: ${i.waiting || "—"} · enviado há ${i.days} ${i.days === 1 ? "dia" : "dias"}`)).join("")
+    }</table>`;
+    if (items.length > 25) body += para(`E mais ${items.length - 25}.`);
+  }
+  if (expiring.length) {
+    body += para("<strong>Contratos a terminar nos próximos 30 dias:</strong>");
+    body += `<table role="presentation" width="100%" style="border-collapse:collapse;margin:0 0 16px">${expiring.slice(0, 15).map((i) => row(i, i.waiting)).join("")}</table>`;
+  }
+  return {
+    subject: items.length
+      ? `Resumo semanal do Signed: ${items.length} ${items.length === 1 ? "documento em curso" : "documentos em curso"}`
+      : `Resumo semanal do Signed: ${expiring.length} ${expiring.length === 1 ? "contrato a terminar" : "contratos a terminar"}`,
+    html: layout("Resumo semanal", body, { label: "Abrir o Signed", url: dashboard }, "Pode desligar este resumo em Preferências, no menu do Signed."),
+  };
+}

@@ -45,6 +45,20 @@ function median(xs: number[]): number | null {
 export function Reports() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [days, setDays] = useState(30);
+  // Contratos concluídos que terminam nos próximos 90 dias (ou terminaram há menos de 30).
+  const [ending, setEnding] = useState<{ id: string; title: string; contract_end: string; workspace: { name: string } | null }[]>([]);
+  useEffect(() => {
+    const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+    supabase
+      .from("documents")
+      .select("id, title, contract_end, workspace:workspaces(name)")
+      .eq("status", "completed")
+      .gte("contract_end", iso(Date.now() - 30 * DAY))
+      .lte("contract_end", iso(Date.now() + 90 * DAY))
+      .order("contract_end")
+      .limit(200)
+      .then(({ data }) => setEnding((data as unknown as typeof ending) ?? []));
+  }, []);
 
   // Lê tudo por páginas de 1000 (o limite do servidor por pedido), até 20 000 documentos.
   useEffect(() => {
@@ -180,6 +194,30 @@ export function Reports() {
             </div>
           ))}
         </div>
+      </section>
+
+      <section className="card mt-6 p-4">
+        <h2 className="font-semibold">Contratos a terminar <span className="font-normal text-slate-500">(próximos 90 dias · {ending.length})</span></h2>
+        {ending.length === 0 ? (
+          <p className="muted mt-3">Nenhum contrato com fim nos próximos 90 dias. Defina a data de fim no detalhe de cada documento assinado.</p>
+        ) : (
+          <ul className="mt-3 divide-y divide-slate-100">
+            {ending.map((d) => {
+              const left = Math.round((Date.parse(`${d.contract_end}T00:00:00Z`) - Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`)) / DAY);
+              return (
+                <li key={d.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                  <span className="min-w-0">
+                    <Link to={`/documentos/${d.id}`} className="font-medium text-slate-900 hover:underline">{d.title}</Link>
+                    <span className="block text-xs text-slate-500">{d.workspace?.name}</span>
+                  </span>
+                  <span className={`shrink-0 text-xs font-medium ${left < 0 ? "text-slate-500" : left <= 30 ? "text-orange-700" : "text-slate-700"}`}>
+                    {fmtDate(d.contract_end)} · {left < 0 ? "terminou" : left === 0 ? "hoje" : `${left} ${left === 1 ? "dia" : "dias"}`}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </section>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">

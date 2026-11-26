@@ -145,6 +145,33 @@ export function DocumentDetail() {
               <button className="btn-secondary" disabled={busy} onClick={() => act("remind")}>Enviar lembrete</button>
               <button className="btn-secondary" disabled={busy} onClick={() => setCorrecting(true)} title="Corrigir nome, email ou prazo sem cancelar">Corrigir</button>
               <button className="btn-danger" disabled={busy} onClick={() => act("cancel")}>Cancelar</button>
+              <button
+                className="btn-ghost"
+                disabled={busy || !doc.original_path}
+                title="Cancela este envio e abre uma cópia em rascunho para alterar o documento, os campos ou os destinatários"
+                onClick={async () => {
+                  const ok = await confirmAction({
+                    title: "Corrigir e reenviar",
+                    message: "Este envio é cancelado (os links deixam de funcionar) e abre-se uma cópia em rascunho com os mesmos destinatários e campos, para alterar e enviar de novo.",
+                    confirmLabel: "Cancelar e abrir cópia",
+                    danger: true,
+                  });
+                  if (!ok) return;
+                  setBusy(true);
+                  try {
+                    await documentAction("cancel", doc.id);
+                    const id = await instantiate({ sourceId: doc.id, sourcePath: doc.original_path!, asTemplate: false, title: doc.title, workspaceId: doc.workspace_id, folderId: doc.folder_id });
+                    toast("Envio cancelado. Altere a cópia e envie de novo.");
+                    nav(`/documentos/${id}/editar`);
+                  } catch (e) {
+                    toast(errorMessage(e), "error");
+                    setBusy(false);
+                    load();
+                  }
+                }}
+              >
+                Corrigir e reenviar
+              </button>
             </>
           )}
           <button className="btn-ghost" onClick={() => download(doc.original_path, `${base}_original.pdf`)}>Original</button>
@@ -167,6 +194,28 @@ export function DocumentDetail() {
               }}
             >
               Guardar como modelo
+            </button>
+          )}
+          {doc.original_path && doc.status !== "in_progress" && (
+            <button
+              className="btn-ghost"
+              disabled={busy}
+              title="Novo rascunho com o mesmo PDF, destinatários e campos (sem os valores preenchidos)"
+              onClick={async () => {
+                const name = await promptText({ title: "Duplicar documento", message: "Cria um rascunho com o mesmo PDF, os mesmos destinatários e os mesmos campos. Os valores preenchidos e as assinaturas não são copiados.", label: "Título da cópia", defaultValue: doc.title, confirmLabel: "Duplicar" });
+                if (!name) return;
+                setBusy(true);
+                try {
+                  const id = await instantiate({ sourceId: doc.id, sourcePath: doc.original_path!, asTemplate: false, title: name, workspaceId: doc.workspace_id, folderId: doc.folder_id });
+                  toast("Cópia criada.");
+                  nav(`/documentos/${id}/editar`);
+                } catch (e) {
+                  toast(errorMessage(e), "error");
+                  setBusy(false);
+                }
+              }}
+            >
+              Duplicar
             </button>
           )}
         </div>
@@ -213,6 +262,9 @@ export function DocumentDetail() {
         </div>
 
         <div className="order-1 space-y-6 lg:order-2">
+          {(doc.status === "completed" || doc.status === "in_progress") && (
+            <ContractCard doc={doc} canEdit={doc.owner_id === profile?.id} onSaved={load} />
+          )}
           <section className="card p-4">
             <div className="flex items-center justify-between">
               <h2 className="font-semibold">Destinatários</h2>
@@ -469,5 +521,66 @@ function TestEmailBody({ text }: { text: string }) {
         <p className="mt-1 whitespace-pre-wrap text-slate-700">{text}</p>
       </details>
     </div>
+  );
+}
+
+/** Fim do contrato: data e antecedência do alerta de renovação (o dono pode definir depois de assinado). */
+function ContractCard({ doc, canEdit, onSaved }: { doc: DocumentRow; canEdit: boolean; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [end, setEnd] = useState("");
+  const [days, setDays] = useState(30);
+  const [busy, setBusy] = useState(false);
+  if (!doc.contract_end && !canEdit) return null;
+  const pt = (d: string) => d.split("-").reverse().join("/");
+  async function save(clear = false) {
+    setBusy(true);
+    const { error } = await supabase
+      .from("documents")
+      .update(clear ? { contract_end: null } : { contract_end: end || null, renewal_notice_days: days })
+      .eq("id", doc.id);
+    setBusy(false);
+    if (error) return toast(errorMessage(error), "error");
+    toast(clear ? "Data de fim removida." : "Fim do contrato guardado.");
+    setEditing(false);
+    onSaved();
+  }
+  return (
+    <section className="card p-4">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="font-semibold">Fim do contrato</h2>
+        {canEdit && !editing && (
+          <button
+            className="text-sm font-medium text-navy-600 hover:underline"
+            onClick={() => {
+              setEnd(doc.contract_end ?? "");
+              setDays(doc.renewal_notice_days ?? 30);
+              setEditing(true);
+            }}
+          >
+            {doc.contract_end ? "Alterar" : "Definir"}
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <div className="mt-3 space-y-2">
+          <input type="date" className="input" value={end} onChange={(e) => setEnd(e.target.value)} aria-label="Data de fim do contrato" />
+          <select className="input" value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="Avisar antes do fim">
+            {[7, 15, 30, 60, 90, 120, 180].map((d) => <option key={d} value={d}>Avisar {d} dias antes</option>)}
+          </select>
+          <div className="flex justify-end gap-2 pt-1">
+            {doc.contract_end && <button className="btn-ghost mr-auto text-red-700" disabled={busy} onClick={() => save(true)}>Remover</button>}
+            <button className="btn-secondary" disabled={busy} onClick={() => setEditing(false)}>Cancelar</button>
+            <button className="btn-primary" disabled={busy || !end} onClick={() => save()}>Guardar</button>
+          </div>
+        </div>
+      ) : doc.contract_end ? (
+        <p className="mt-1 text-sm text-slate-700">
+          {pt(doc.contract_end)} · alerta {doc.renewal_notice_days ?? 30} dias antes
+          {doc.renewal_notified_at && <span className="block text-xs text-slate-500">Alerta enviado a {fmtDateTime(doc.renewal_notified_at)}.</span>}
+        </p>
+      ) : (
+        <p className="mt-1 text-sm text-slate-500">Defina a data para receber um email antes de o contrato terminar.</p>
+      )}
+    </section>
   );
 }

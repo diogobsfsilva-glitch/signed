@@ -7,7 +7,7 @@ import { currentRecipients } from "../_shared/workflow.ts";
 import { m365Config, sendMail, uploadToSharePoint } from "../_shared/m365.ts";
 
 interface Body {
-  action: "send" | "cancel" | "remind" | "correct" | "in_person" | "m365-test";
+  action: "send" | "cancel" | "remind" | "correct" | "in_person" | "m365-test" | "sign-as-me";
   document_id: string;
   recipient_id?: string;
   /** correct: destinatários a corrigir */
@@ -79,6 +79,25 @@ Deno.serve(handler(async (req) => {
         await sb.from("recipients").update({ viewed_at: new Date().toISOString(), status: ["pending", "notified"].includes(r.status) ? "viewed" : r.status }).eq("id", r.id);
       }
       await audit(sb, b.doc.id, "recipient.in_person_started", { recipientId: r.id, actorUserId: user.id, ip, ua, details: { host: user.full_name || user.email } });
+      return json({ token: await signerToken(r), session });
+    }
+
+    case "sign-as-me": {
+      // Um colaborador assina um documento dirigido ao seu email: o login Microsoft já confirmou o
+      // email, por isso não precisa do código. Fica registado no histórico.
+      const me = user.email.toLowerCase();
+      const r = b.recipients.find((x) => x.id === body.recipient_id);
+      const isMine = r && (r.email.toLowerCase() === me || (r.group_emails ?? []).some((g) => g.toLowerCase() === me));
+      if (!r || !isMine || r.role !== "signer" || r.in_person) throw new HttpError(404, "Pedido de assinatura não encontrado.");
+      if (b.doc.status !== "in_progress") throw new HttpError(409, "O documento já não está em curso.");
+      if (!currentRecipients(b.doc, b.recipients, b.fields).some((x) => x.id === r.id)) {
+        throw new HttpError(409, "Ainda não é a sua vez de assinar.");
+      }
+      const session = await createSignerSession(sb, r.id, 4 * 3600_000, r.group_emails?.length ? me : null);
+      if (!r.viewed_at) {
+        await sb.from("recipients").update({ viewed_at: new Date().toISOString(), status: ["pending", "notified"].includes(r.status) ? "viewed" : r.status }).eq("id", r.id);
+      }
+      await audit(sb, b.doc.id, "recipient.authenticated_sso", { recipientId: r.id, actorUserId: user.id, ip, ua, details: { email: me } });
       return json({ token: await signerToken(r), session });
     }
 

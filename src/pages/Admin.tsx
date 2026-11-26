@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth, type Profile } from "../auth/AuthProvider";
 import { Alert, FullPageSpinner, Modal, PlusIcon, Spinner, TrashIcon, toast } from "../components/ui";
 import { BrandMark, luminance } from "../components/Brand";
 import { m365Test, type M365TestResult } from "../lib/api";
-import { errorMessage, fmtDate, plural } from "../lib/format";
+import { errorMessage, fmtDate, fmtDateTime, plural } from "../lib/format";
 import { confirmAction } from "../components/dialogs";
 
-type Tab = "workspaces" | "users" | "settings";
+type Tab = "workspaces" | "users" | "settings" | "health";
 
 interface Ws {
   id: string;
@@ -28,6 +29,7 @@ export function Admin() {
           ["workspaces", "Espaços de trabalho"],
           ["users", "Utilizadores"],
           ["settings", "Definições"],
+          ["health", "Estado"],
         ] as [Tab, string][]).map(([t, l]) => (
           <button key={t} onClick={() => setTab(t)} className={`-mb-px border-b-2 px-3 py-2 font-medium ${tab === t ? "border-navy-900 text-navy-900" : "border-transparent text-slate-500 hover:text-slate-800"}`}>
             {l}
@@ -38,6 +40,7 @@ export function Admin() {
         {tab === "workspaces" && <Workspaces />}
         {tab === "users" && <Users />}
         {tab === "settings" && <Settings />}
+        {tab === "health" && <Health />}
       </div>
     </div>
   );
@@ -422,6 +425,96 @@ function BrandSettings({ ws, onChange }: { ws: Ws; onChange: () => void }) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Estado do sistema: o que falhou nos últimos 7 dias e documentos que precisam de atenção. */
+interface HealthData {
+  emails: { id: number; document_id: string | null; to_email: string; kind: string; error: string | null; created_at: string }[];
+  archive: { id: string; title: string; archive_error: string | null; completed_at: string | null }[];
+  stuck: { id: string; title: string; sent_at: string | null }[];
+  events: { document_id: string; event: string; created_at: string; details: Record<string, unknown> | null }[];
+}
+
+function Health() {
+  const [data, setData] = useState<HealthData | null>(null);
+  useEffect(() => {
+    const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
+    Promise.all([
+      supabase.from("email_log").select("id, document_id, to_email, kind, error, created_at").eq("status", "failed").gte("created_at", since).order("id", { ascending: false }).limit(50),
+      supabase.from("documents").select("id, title, archive_error, completed_at").eq("status", "completed").not("archive_error", "is", null).order("completed_at", { ascending: false }).limit(50),
+      supabase.from("documents").select("id, title, sent_at, recipients(role, status)").eq("status", "in_progress").limit(1000),
+      supabase.from("audit_events").select("document_id, event, created_at, details").in("event", ["recipient.notify_failed", "document.schedule_failed"]).gte("created_at", since).order("id", { ascending: false }).limit(50),
+    ]).then(([e, a, s, ev]) => {
+      const stuck = ((s.data ?? []) as unknown as { id: string; title: string; sent_at: string | null; recipients: { role: string; status: string }[] }[])
+        .filter((d) => {
+          const signers = d.recipients.filter((r) => r.role === "signer");
+          return signers.length > 0 && signers.every((r) => r.status === "signed");
+        });
+      setData({ emails: e.data ?? [], archive: a.data ?? [], stuck, events: (ev.data ?? []) as HealthData["events"] });
+    });
+  }, []);
+  if (!data) return <FullPageSpinner />;
+  const ok = !data.emails.length && !data.archive.length && !data.stuck.length && !data.events.length;
+  const KIND: Record<string, string> = { invite: "Convite", reminder: "Lembrete", otp: "Código", completed: "Documento final", declined: "Rejeição", expired: "Expiração", owner_signed: "Aviso de assinatura", renewal: "Fim de contrato", digest: "Resumo semanal", schedule_failed: "Envio agendado" };
+  return (
+    <div className="space-y-6">
+      <p className="muted">Últimos 7 dias. O agendador volta a tentar os convites que falharam de hora a hora; os documentos presos são retomados automaticamente.</p>
+      {ok && <Alert kind="success">Tudo em ordem: nenhuma falha nos últimos 7 dias.</Alert>}
+      <M365Check />
+      {data.emails.length > 0 && (
+        <section className="card p-4">
+          <h2 className="font-semibold">Emails que falharam ({data.emails.length})</h2>
+          <ul className="mt-2 divide-y divide-slate-100 text-sm">
+            {data.emails.map((m) => (
+              <li key={m.id} className="py-2">
+                <p><span className="font-medium">{KIND[m.kind] ?? m.kind}</span> para {m.to_email} · <span className="text-slate-500">{fmtDateTime(m.created_at)}</span>
+                  {m.document_id && <> · <Link className="text-navy-600 hover:underline" to={`/documentos/${m.document_id}`}>documento</Link></>}</p>
+                {m.error && <p className="mt-0.5 break-words text-xs text-red-700">{m.error}</p>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {data.events.length > 0 && (
+        <section className="card p-4">
+          <h2 className="font-semibold">Convites e envios agendados por fazer ({data.events.length})</h2>
+          <ul className="mt-2 divide-y divide-slate-100 text-sm">
+            {data.events.map((e, i) => (
+              <li key={i} className="py-2">
+                {e.event === "document.schedule_failed" ? "Envio agendado falhou" : "Convite não entregue"} · <span className="text-slate-500">{fmtDateTime(e.created_at)}</span> ·{" "}
+                <Link className="text-navy-600 hover:underline" to={`/documentos/${e.document_id}`}>documento</Link>
+                {typeof e.details?.reason === "string" && <p className="mt-0.5 text-xs text-red-700">{e.details.reason}</p>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {data.archive.length > 0 && (
+        <section className="card p-4">
+          <h2 className="font-semibold">Arquivo no SharePoint falhou ({data.archive.length})</h2>
+          <ul className="mt-2 divide-y divide-slate-100 text-sm">
+            {data.archive.map((d) => (
+              <li key={d.id} className="py-2">
+                <Link className="font-medium text-slate-900 hover:underline" to={`/documentos/${d.id}`}>{d.title}</Link> · <span className="text-slate-500">{fmtDateTime(d.completed_at)}</span>
+                <p className="mt-0.5 break-words text-xs text-red-700">{d.archive_error}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {data.stuck.length > 0 && (
+        <section className="card p-4">
+          <h2 className="font-semibold">Todos assinaram, mas não ficaram concluídos ({data.stuck.length})</h2>
+          <p className="muted mt-1">O agendador tenta concluí-los de hora a hora. Se continuarem aqui, veja o histórico de cada um.</p>
+          <ul className="mt-2 divide-y divide-slate-100 text-sm">
+            {data.stuck.map((d) => (
+              <li key={d.id} className="py-2"><Link className="font-medium text-slate-900 hover:underline" to={`/documentos/${d.id}`}>{d.title}</Link> · <span className="text-slate-500">enviado {fmtDate(d.sent_at)}</span></li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

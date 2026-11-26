@@ -53,6 +53,14 @@ export interface DocumentRow {
   updated_at: string;
   sent_at: string | null;
   completed_at: string | null;
+  /** Fim do contrato (AAAA-MM-DD): alerta ao remetente renewal_notice_days antes. */
+  contract_end?: string | null;
+  renewal_notice_days?: number;
+  renewal_notified_at?: string | null;
+  /** Email ao remetente sempre que alguém assina. */
+  notify_owner?: boolean;
+  /** Rascunho com envio agendado. */
+  scheduled_at?: string | null;
 }
 
 /** Um documento dentro de um pacote: nome e número de páginas (as partes são contíguas, pela ordem). */
@@ -245,6 +253,10 @@ export const EVENT_LABELS: Record<string, string> = {
   "template.created_from_document": "Modelo criado a partir de um documento",
   "document.sent": "Documento enviado",
   "document.cancelled": "Documento cancelado",
+  "document.duplicated": "Criado a partir de outro documento",
+  "document.renewal_alert": "Alerta de fim de contrato enviado",
+  "document.scheduled_sent": "Enviado na data agendada",
+  "document.schedule_failed": "Envio agendado falhou",
   "document.prepared": "PDF preparado para assinatura qualificada",
   "document.completed": "Documento concluído",
   "document.declined": "Documento rejeitado",
@@ -257,6 +269,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "recipient.otp_sent": "Código de acesso enviado",
   "recipient.otp_failed": "Código de acesso errado",
   "recipient.authenticated": "Acesso confirmado com código",
+  "recipient.authenticated_sso": "Acesso com a conta Microsoft da Altis",
   "recipient.viewed": "Documento aberto",
   "recipient.filled": "Campos preenchidos",
   "recipient.signed": "Assinou (assinatura simples)",

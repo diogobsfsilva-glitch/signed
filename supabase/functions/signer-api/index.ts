@@ -2,7 +2,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { clientIp, handler, HttpError, json, readJson, userAgent } from "../_shared/http.ts";
-import { advance, audit, brandFor, BUCKET, type Bundle, docFolder, download, fillAutoFields, loadBundle, REASSIGNABLE, reassignRecipient, serviceClient, tokenHash, upload, withDocLock } from "../_shared/engine.ts";
+import { advance, audit, brandFor, BUCKET, type Bundle, docFolder, download, fillAutoFields, loadBundle, REASSIGNABLE, reassignRecipient, serviceClient, tokenHash, upload, withDocLock, notifyOwnerSigned } from "../_shared/engine.ts";
 import { assertSignaturePng } from "../_shared/pdf.ts";
 import { ccRejectedEmail, declinedEmail, delegatedEmail, deliver, otpEmail } from "../_shared/email.ts";
 import { currentRecipients } from "../_shared/workflow.ts";
@@ -334,6 +334,7 @@ Deno.serve(handler(async (req) => {
       }
       });
       await advance(sb, b.doc.id);
+      if (b.doc.signature_mode === "simple") await notifyOwnerSigned(sb, b.doc.id, rid);
       return json({ ok: true });
     }
 
@@ -465,6 +466,7 @@ Deno.serve(handler(async (req) => {
         });
         });
         await advance(sb, b.doc.id);
+        await notifyOwnerSigned(sb, b.doc.id, rid);
         b = await loadBundle(sb, b.doc.id);
         return json({ ok: true, signer: result.signer.commonName, completed: b.doc.status === "completed" });
       } catch (e) {

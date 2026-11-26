@@ -11,7 +11,7 @@ import { validateForSend } from "../../supabase/functions/_shared/workflow";
 import { PdfPages } from "../components/PdfPages";
 import { DEFAULT_SIZE, FieldIcon } from "../components/FieldBox";
 import { Alert, ArrowDown, ArrowUp, FullPageSpinner, IdIcon, Modal, PlusIcon, Spinner, TrashIcon, toast } from "../components/ui";
-import { errorMessage, plural, RECIPIENT_COLORS } from "../lib/format";
+import { errorMessage, fmtDateTime, plural, RECIPIENT_COLORS } from "../lib/format";
 import { confirmAction, promptText } from "../components/dialogs";
 
 type R = Pick<RecipientRow, "id" | "name" | "email" | "role" | "signing_order" | "civil_id" | "color" | "status"> & { in_person: boolean; language: string; group_emails: string[] | null };
@@ -386,6 +386,12 @@ export function Editor() {
         )}
       </div>
 
+      {doc.scheduled_at && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-900">
+          <span>Envio agendado para <strong>{fmtDateTime(doc.scheduled_at)}</strong>. Até lá pode continuar a alterar o documento.</span>
+          <button className="btn-ghost py-1 text-sky-900 underline" onClick={() => patchDoc({ scheduled_at: null })}>Cancelar agendamento</button>
+        </div>
+      )}
       <p className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 sm:hidden">
         Para colocar e ajustar campos, o editor funciona melhor num computador ou tablet. No telemóvel pode rever e enviar.
       </p>
@@ -541,7 +547,21 @@ export function Editor() {
         </div>
       </div>
 
-      <ReviewModal open={review} onClose={() => setReview(false)} doc={doc} recipients={recipients} fields={fields} issues={issues.map((i) => i.message)} onSent={() => nav(`/documentos/${doc.id}`)} />
+      <ReviewModal
+        open={review}
+        onClose={() => setReview(false)}
+        doc={doc}
+        recipients={recipients}
+        fields={fields}
+        issues={issues.map((i) => i.message)}
+        onSent={() => nav(`/documentos/${doc.id}`)}
+        onSchedule={async (iso) => {
+          const { error } = await supabase.from("documents").update({ scheduled_at: iso }).eq("id", doc.id);
+          if (error) throw error;
+          toast(`Envio agendado para ${fmtDateTime(iso)}.`);
+          nav("/");
+        }}
+      />
     </div>
   );
 }
@@ -893,6 +913,25 @@ function SettingsPanel({ doc, onPatch, hasInitials }: { doc: DocumentRow; onPatc
         </div>
       </div>
 
+      <fieldset>
+        <legend className="label">Fim do contrato (opcional)</legend>
+        <div className="grid grid-cols-2 gap-3">
+          <input id="cend" type="date" className="input" value={doc.contract_end ?? ""} onChange={(e) => onPatch({ contract_end: e.target.value || null })} aria-label="Data de fim do contrato" />
+          <select className="input" value={doc.renewal_notice_days ?? 30} onChange={(e) => onPatch({ renewal_notice_days: Number(e.target.value) })} aria-label="Avisar antes do fim" disabled={!doc.contract_end}>
+            {[7, 15, 30, 60, 90, 120, 180].map((d) => <option key={d} value={d}>Avisar {d} dias antes</option>)}
+          </select>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">Recebe um email antes de o contrato terminar, para preparar a renovação. Pode ser definido ou alterado também depois de assinado.</p>
+      </fieldset>
+
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-0.5" checked={doc.notify_owner !== false} onChange={(e) => onPatch({ notify_owner: e.target.checked })} />
+        <span>
+          <span className="font-medium">Avisar-me quando cada pessoa assina</span>
+          <span className="block text-xs text-slate-500">Além do email final com o documento assinado.</span>
+        </span>
+      </label>
+
       <div>
         <label className="label" htmlFor="subj">Assunto do email (opcional)</label>
         <input id="subj" className="input" defaultValue={doc.subject ?? ""} maxLength={200} onBlur={(e) => onPatch({ subject: e.target.value.trim() || null })} placeholder="Gerado automaticamente se vazio" />
@@ -905,9 +944,21 @@ function SettingsPanel({ doc, onPatch, hasInitials }: { doc: DocumentRow; onPatc
   );
 }
 
-function ReviewModal({ open, onClose, doc, recipients, fields, issues, onSent }: { open: boolean; onClose: () => void; doc: DocumentRow; recipients: R[]; fields: F[]; issues: string[]; onSent: () => void }) {
+function ReviewModal({ open, onClose, doc, recipients, fields, issues, onSent, onSchedule }: {
+  open: boolean; onClose: () => void; doc: DocumentRow; recipients: R[]; fields: F[]; issues: string[]; onSent: () => void; onSchedule: (iso: string) => Promise<void>;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [when, setWhen] = useState<"now" | "later">(doc.scheduled_at ? "later" : "now");
+  // datetime-local em hora local; por omissão, amanhã às 9h.
+  const [at, setAt] = useState(() => {
+    const d = doc.scheduled_at ? new Date(doc.scheduled_at) : new Date(Date.now() + 86_400_000);
+    if (!doc.scheduled_at) d.setHours(9, 0, 0, 0);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  });
+  const atDate = new Date(at);
+  const atInvalid = when === "later" && (isNaN(atDate.getTime()) || atDate.getTime() < Date.now() + 10 * 60_000);
   const ordered = [...recipients].sort((a, b) => a.signing_order - b.signing_order);
   return (
     <Modal open={open} onClose={onClose} title="Rever e enviar" wide>
@@ -919,7 +970,17 @@ function ReviewModal({ open, onClose, doc, recipients, fields, issues, onSent }:
             <span><strong className="text-slate-900">Tipo:</strong> {doc.signature_mode === "qualified" ? "Cartão de Cidadão (qualificada)" : "Assinatura simples"}</span>
             <span><strong className="text-slate-900">Ordem:</strong> {doc.sequential ? "sequencial" : "em simultâneo"}</span>
             {doc.expires_at && <span><strong className="text-slate-900">Prazo:</strong> {new Date(doc.expires_at).toLocaleDateString("pt-PT")}</span>}
+            {doc.contract_end && <span><strong className="text-slate-900">Fim do contrato:</strong> {doc.contract_end.split("-").reverse().join("/")}</span>}
           </div>
+          {doc.parts && doc.parts.length > 1 && (
+            <p className="text-slate-600"><strong className="text-slate-900">Documentos ({doc.parts.length}):</strong> {doc.parts.map((p) => p.name).join(" · ")}</p>
+          )}
+          {(doc.subject || doc.message) && (
+            <div className="rounded-lg bg-slate-50 px-3 py-2 text-slate-700">
+              {doc.subject && <p><strong className="text-slate-900">Assunto:</strong> {doc.subject}</p>}
+              {doc.message && <p className="mt-1 whitespace-pre-line">{doc.message}</p>}
+            </div>
+          )}
           <ol className="divide-y divide-slate-100 rounded-lg border border-slate-200">
             {ordered.map((r, i) => (
               <li key={r.id} className="flex items-center gap-3 px-3 py-2">
@@ -937,16 +998,38 @@ function ReviewModal({ open, onClose, doc, recipients, fields, issues, onSent }:
           )}
         </div>
       )}
+      {issues.length === 0 && (
+        <fieldset className="mt-4 text-sm">
+          <legend className="label">Quando enviar</legend>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <label className="flex items-center gap-2"><input type="radio" name="when" checked={when === "now"} onChange={() => setWhen("now")} /> Agora</label>
+            <label className="flex items-center gap-2"><input type="radio" name="when" checked={when === "later"} onChange={() => setWhen("later")} /> Agendar para</label>
+            {when === "later" && (
+              <input type="datetime-local" className="input w-auto py-1" value={at} onChange={(e) => setAt(e.target.value)} aria-label="Data e hora do envio" />
+            )}
+          </div>
+          {when === "later" && (
+            <p className={`mt-1 text-xs ${atInvalid ? "text-red-700" : "text-slate-500"}`}>
+              {atInvalid ? "Escolha uma data e hora daqui a pelo menos 10 minutos." : "O envio é feito na hora seguinte à indicada (verificação de hora a hora). Até lá o documento fica em rascunho e pode ser alterado."}
+            </p>
+          )}
+        </fieldset>
+      )}
       {error && <div className="mt-3"><Alert>{error}</Alert></div>}
       <div className="mt-5 flex justify-end gap-2">
         <button className="btn-secondary" onClick={onClose}>Voltar</button>
         <button
           className="btn-primary"
-          disabled={issues.length > 0 || busy}
+          disabled={issues.length > 0 || busy || atInvalid}
           onClick={async () => {
             setBusy(true);
             setError(null);
             try {
+              if (when === "later") {
+                await onSchedule(atDate.toISOString());
+                return;
+              }
+              if (doc.scheduled_at) await supabase.from("documents").update({ scheduled_at: null }).eq("id", doc.id);
               await documentAction("send", doc.id);
               toast("Documento enviado.");
               onSent();
@@ -957,7 +1040,7 @@ function ReviewModal({ open, onClose, doc, recipients, fields, issues, onSent }:
             }
           }}
         >
-          {busy ? <Spinner className="h-4 w-4 text-white" /> : null} Enviar
+          {busy ? <Spinner className="h-4 w-4 text-white" /> : null} {when === "later" ? "Agendar envio" : "Enviar"}
         </button>
       </div>
     </Modal>

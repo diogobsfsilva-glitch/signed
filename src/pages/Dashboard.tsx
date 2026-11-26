@@ -4,8 +4,8 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthProvider";
 import type { DocStatus } from "../../supabase/functions/_shared/types";
 import { EmptyState, FolderIcon, FullPageSpinner, ModeBadge, Modal, PlusIcon, StatusBadge, toast } from "../components/ui";
-import { errorMessage, plural, relative } from "../lib/format";
-import { documentAction } from "../lib/api";
+import { errorMessage, fmtDateTime, plural, relative } from "../lib/format";
+import { documentAction, rememberSignerSession, signAsMe } from "../lib/api";
 import { confirmAction } from "../components/dialogs";
 
 interface Row {
@@ -23,6 +23,25 @@ interface Row {
   public_link_id: string | null;
   recipients: { name: string; role: string; status: string }[];
   owner: { full_name: string | null; email: string } | null;
+  scheduled_at: string | null;
+  contract_end: string | null;
+  renewal_notice_days: number;
+}
+
+interface Request {
+  recipient_id: string;
+  document_id: string;
+  title: string;
+  sender: string;
+  sent_at: string;
+  expires_at: string | null;
+  mode: "simple" | "qualified";
+}
+
+/** Dias até uma data AAAA-MM-DD (negativo se já passou). */
+function daysUntil(date: string): number {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon" }).format(new Date());
+  return Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
 }
 
 interface Folder {
@@ -93,7 +112,7 @@ export function Dashboard() {
     const [{ data: docs, error }, { data: f }] = await Promise.all([
       supabase
         .from("documents")
-        .select("id, title, status, signature_mode, parts, updated_at, sent_at, owner_id, folder_id, workspace_id, batch_id, public_link_id, recipients(name, role, status), owner:profiles!documents_owner_id_fkey(full_name, email)")
+        .select("id, title, status, signature_mode, parts, scheduled_at, contract_end, renewal_notice_days, updated_at, sent_at, owner_id, folder_id, workspace_id, batch_id, public_link_id, recipients(name, role, status), owner:profiles!documents_owner_id_fkey(full_name, email)")
         .eq("is_template", false)
         .order("updated_at", { ascending: false })
         .range(0, n * PAGE - 1),
@@ -111,6 +130,23 @@ export function Dashboard() {
   async function more() {
     setPages(pages + 1);
     await load(pages + 1);
+  }
+  // Pedidos de assinatura dirigidos a mim (colaborador que também assina).
+  const [requests, setRequests] = useState<Request[]>([]);
+  const [opening, setOpening] = useState<string | null>(null);
+  useEffect(() => {
+    supabase.rpc("my_signature_requests").then(({ data }) => setRequests((data as Request[] | null) ?? []));
+  }, []);
+  async function signNow(r: Request) {
+    setOpening(r.recipient_id);
+    try {
+      const s = await signAsMe(r.document_id, r.recipient_id);
+      rememberSignerSession(s.token, s.session);
+      nav(`/s/${s.token}`);
+    } catch (e) {
+      toast(errorMessage(e), "error");
+      setOpening(null);
+    }
   }
   // A seleção não sobrevive a uma mudança de filtro (evita cancelar documentos que já não se veem).
   useEffect(() => setPicked(new Set()), [tab, folder, batch, linkId, q]);
@@ -199,6 +235,30 @@ export function Dashboard() {
             </div>
             <input className="input xl:max-w-60" placeholder="Pesquisar título ou pessoa" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Pesquisar" />
           </div>
+          {requests.length > 0 && !batch && !linkId && (
+            <section className="mt-4 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
+              <h2 className="px-1 text-sm font-semibold text-amber-950">
+                Para eu assinar <span className="font-normal text-amber-900">({requests.length})</span>
+              </h2>
+              <ul className="mt-2 divide-y divide-amber-200/70">
+                {requests.map((r) => (
+                  <li key={r.recipient_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 py-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium text-slate-900">{r.title}</p>
+                      <p className="text-xs text-slate-600">
+                        De {r.sender} · {relative(r.sent_at)}
+                        {r.expires_at && ` · prazo ${new Date(r.expires_at).toLocaleDateString("pt-PT")}`}
+                      </p>
+                    </div>
+                    {r.mode === "qualified" && <ModeBadge mode="qualified" />}
+                    <button className="btn-primary py-1.5" disabled={opening === r.recipient_id} onClick={() => signNow(r)}>
+                      {opening === r.recipient_id ? "A abrir…" : "Assinar"}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           {(batch || linkId) && (
             <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-navy-50 px-3 py-2 text-sm text-navy-900">
               <strong>{batchTitle}</strong>
@@ -273,6 +333,16 @@ export function Dashboard() {
                         </div>
                         <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 whitespace-nowrap">
                           <StatusBadge status={r.status} />
+                          {r.status === "draft" && r.scheduled_at && (
+                            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-800 ring-1 ring-inset ring-sky-200">
+                              Agendado · {fmtDateTime(r.scheduled_at)}
+                            </span>
+                          )}
+                          {r.status === "completed" && r.contract_end && daysUntil(r.contract_end) <= r.renewal_notice_days && (
+                            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${daysUntil(r.contract_end) < 0 ? "bg-slate-100 text-slate-700 ring-slate-200" : "bg-orange-50 text-orange-800 ring-orange-200"}`}>
+                              {daysUntil(r.contract_end) < 0 ? "Contrato terminado" : daysUntil(r.contract_end) === 0 ? "Termina hoje" : `Termina em ${plural(daysUntil(r.contract_end), "dia", "dias")}`}
+                            </span>
+                          )}
                           {r.status === "in_progress" && (
                             <span className="text-xs tabular-nums text-slate-500">
                               {done}/{signers.length} assinaram

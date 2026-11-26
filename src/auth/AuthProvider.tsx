@@ -8,6 +8,7 @@ export interface Profile {
   full_name: string | null;
   role: "admin" | "user";
   active: boolean;
+  weekly_digest?: boolean;
 }
 
 export interface Workspace {
@@ -48,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (loadedFor.current === s.user.id) return;
-    const { data: p, error: pe } = await supabase.from("profiles").select("id, email, full_name, role, active").eq("id", s.user.id).maybeSingle();
+    const { data: p, error: pe } = await supabase.from("profiles").select("id, email, full_name, role, active, weekly_digest").eq("id", s.user.id).maybeSingle();
     if (pe) {
       // Falha de rede: não deita fora a sessão nem o trabalho em curso.
       if (!loadedFor.current) setError("Não foi possível ligar ao Signed. Verifique a ligação à internet e recarregue a página.");

@@ -167,9 +167,9 @@ describe("modelos", () => {
 
   it("guardar como modelo e regras de acesso", async () => {
     const d = await create(owner, ownerId, false, ["x@exemplo.pt", "y@exemplo.pt"]);
-    // Um documento normal não serve de modelo.
-    const bad = await owner.rpc("instantiate_document", { p_source: d.doc.id, p_as_template: false });
-    expect(bad.error?.message).toMatch(/não é um modelo/);
+    // O dono pode duplicar um documento normal (função «Duplicar»).
+    const dup = await owner.rpc("instantiate_document", { p_source: d.doc.id, p_as_template: false });
+    expect(dup.error).toBeNull();
     // Outro colaborador não vê o documento, logo não o copia.
     const steal = await member.rpc("instantiate_document", { p_source: d.doc.id, p_as_template: true });
     expect(steal.error?.message).toMatch(/não encontrado/);

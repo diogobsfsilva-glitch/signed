@@ -163,7 +163,8 @@ export async function buildAuditCertificate(input: AuditCertificateInput): Promi
     if (r.in_person) w.kv("Assinatura", "Presencial, no dispositivo de um colaborador (ver histórico)");
     else if (r.role === "signer" && input.document.signature_mode === "simple") {
       const has = (ev: string) => input.events.some((e) => e.recipient_id === r.id && e.event === ev);
-      if (has("recipient.authenticated")) w.kv("Verificação", "Email confirmado com código de 6 dígitos");
+      if (has("recipient.authenticated_sso")) w.kv("Verificação", "Sessão na conta Microsoft 365 da organização");
+      else if (has("recipient.authenticated")) w.kv("Verificação", "Email confirmado com código de 6 dígitos");
       else if (has("recipient.public_access")) w.kv("Verificação", "Formulário público, sem confirmação do email");
     }
     if (r.group_emails?.length) w.kv("Grupo", r.group_emails.join(", "));
