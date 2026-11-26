@@ -9,9 +9,10 @@ import type { DocPart, DocumentRow, FieldRow, FieldType, RecipientRow } from "..
 import { AUTO_FIELD_TYPES, FIELD_LABELS, isAutoField, isPrefillable, MAX_PARTS, partRanges } from "../../supabase/functions/_shared/types";
 import { validateForSend } from "../../supabase/functions/_shared/workflow";
 import { PdfPages } from "../components/PdfPages";
-import { DEFAULT_SIZE, fieldIcon } from "../components/FieldBox";
+import { DEFAULT_SIZE, FieldIcon } from "../components/FieldBox";
 import { Alert, ArrowDown, ArrowUp, FullPageSpinner, IdIcon, Modal, PlusIcon, Spinner, TrashIcon, toast } from "../components/ui";
-import { errorMessage, RECIPIENT_COLORS } from "../lib/format";
+import { errorMessage, plural, RECIPIENT_COLORS } from "../lib/format";
+import { confirmAction, promptText } from "../components/dialogs";
 
 type R = Pick<RecipientRow, "id" | "name" | "email" | "role" | "signing_order" | "civil_id" | "color" | "status"> & { in_person: boolean; language: string; group_emails: string[] | null };
 type F = Pick<FieldRow, "id" | "recipient_id" | "type" | "page" | "x" | "y" | "w" | "h" | "required" | "label" | "options" | "group_name" | "value"> & { readonly: boolean };
@@ -114,7 +115,7 @@ export function Editor() {
 
   async function removeRecipient(rid: string) {
     const n = fields.filter((f) => f.recipient_id === rid).length;
-    if (n && !confirm(`Remover este destinatário apaga também os ${n} campos dele. Continuar?`)) return;
+    if (n && !(await confirmAction({ title: "Remover destinatário", message: n === 1 ? "O campo desta pessoa também é apagado." : `Os ${n} campos desta pessoa também são apagados.`, confirmLabel: "Remover", danger: true }))) return;
     const res = await track(supabase.from("recipients").delete().eq("id", rid));
     if (!res.error) {
       setRecipients((x) => x.filter((r) => r.id !== rid));
@@ -236,6 +237,7 @@ export function Editor() {
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       const cur = fieldsRef.current.find((y) => y.id === f.id);
       if (cur && (cur.x !== start.x || cur.y !== start.y || cur.w !== start.w || cur.h !== start.h)) {
         track(supabase.from("fields").update({ x: cur.x, y: cur.y, w: cur.w, h: cur.h }).eq("id", f.id));
@@ -243,6 +245,7 @@ export function Editor() {
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
   if (notFound) return <div className="p-8"><Alert>Documento não encontrado.</Alert></div>;
@@ -259,8 +262,8 @@ export function Editor() {
   const home = isTemplate ? "/modelos" : "/";
 
   async function saveAsTemplate() {
-    const name = prompt("Nome do modelo:", doc!.title);
-    if (!name?.trim()) return;
+    const name = await promptText({ title: "Guardar como modelo", label: "Nome do modelo", defaultValue: doc!.title, confirmLabel: "Criar modelo" });
+    if (!name) return;
     try {
       const tid = await instantiate({ sourceId: doc!.id, sourcePath: doc!.original_path!, asTemplate: true, title: name.trim(), workspaceId: doc!.workspace_id });
       toast("Modelo criado. Pode ajustar os papéis e os campos.");
@@ -279,7 +282,7 @@ export function Editor() {
     const keep = new Set(sources.flatMap((s) => (s.kind === "old" ? [s.index] : [])));
     const ranges = partRanges(currentParts);
     const lost = fields.filter((f) => ranges.some((r, i) => !keep.has(i) && f.page >= r.from && f.page <= r.to));
-    if (lost.length && !confirm(`Os ${lost.length} campos colocados nos documentos retirados vão ser apagados. Continuar?`)) return;
+    if (lost.length && !(await confirmAction({ title: "Retirar documento", message: lost.length === 1 ? "O campo colocado no documento retirado vai ser apagado." : `Os ${lost.length} campos colocados no documento retirado vão ser apagados.`, confirmLabel: "Retirar", danger: true }))) return;
     setRestructuring(label);
     try {
       const dl = await supabase.storage.from(BUCKET).download(doc!.original_path!);
@@ -340,7 +343,7 @@ export function Editor() {
       onClick={() => setPlacing(placing === t ? null : t)}
       className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-sm ${placing === t ? "border-navy-600 bg-navy-900 text-white" : "border-slate-200 bg-white hover:bg-slate-50"}`}
     >
-      <span className="w-5 text-center text-xs">{fieldIcon(t)}</span>
+      <FieldIcon type={t} className="h-4 w-4 shrink-0" />
       {t === "signature" && doc.signature_mode === "qualified" ? "Assinatura CC" : FIELD_LABELS[t]}
     </button>
   );
@@ -359,11 +362,13 @@ export function Editor() {
           onBlur={(e) => e.target.value.trim() && patchDoc({ title: e.target.value.trim() })}
           aria-label="Título"
         />
-        <span className="hidden text-xs text-slate-400 sm:inline">{saving ? "A guardar…" : "Guardado"}</span>
+        <span className="hidden text-xs text-slate-500 sm:inline">{saving ? "A guardar…" : "Guardado"}</span>
         <button
           className="btn-ghost text-red-700"
           onClick={async () => {
-            if (!confirm(isTemplate ? "Apagar este modelo? Os documentos já criados a partir dele não são afetados." : "Apagar este rascunho?")) return;
+            if (!(await confirmAction(isTemplate
+              ? { title: "Apagar modelo", message: "Os documentos já criados a partir dele não são afetados.", confirmLabel: "Apagar", danger: true }
+              : { title: "Apagar rascunho", message: "O rascunho e os campos colocados são apagados.", confirmLabel: "Apagar", danger: true }))) return;
             const { error } = await supabase.rpc("delete_draft_document", { p_document_id: doc.id });
             if (error) toast(errorMessage(error), "error");
             else nav(home);
@@ -381,6 +386,9 @@ export function Editor() {
         )}
       </div>
 
+      <p className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 sm:hidden">
+        Para colocar e ajustar campos, o editor funciona melhor num computador ou tablet. No telemóvel pode rever e enviar.
+      </p>
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         {/* Painel lateral */}
         <aside className="max-h-[45vh] shrink-0 overflow-y-auto border-b border-slate-200 bg-white lg:max-h-none lg:w-80 lg:border-r lg:border-b-0">
@@ -424,7 +432,7 @@ export function Editor() {
                           >
                             <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: s.color }} />
                             <span className="min-w-0 flex-1 truncate">{s.name}</span>
-                            <span className="text-xs text-slate-400">{fields.filter((f) => f.recipient_id === s.id).length}</span>
+                            <span className="text-xs text-slate-500">{fields.filter((f) => f.recipient_id === s.id).length}</span>
                           </button>
                         ))}
                       </div>
@@ -497,7 +505,7 @@ export function Editor() {
                     return (
                       <div
                         key={f.id}
-                        className={`group absolute flex cursor-move select-none items-center overflow-hidden rounded-[3px] border text-[11px] font-medium ${sel ? "ring-2 ring-offset-1" : ""}`}
+                        className={`group absolute flex cursor-move touch-none select-none items-center overflow-hidden rounded-[3px] border text-[11px] font-medium ${sel ? "ring-2 ring-offset-1" : ""}`}
                         style={{
                           left: `${f.x * 100}%`,
                           top: `${f.y * 100}%`,
@@ -514,13 +522,13 @@ export function Editor() {
                         title={`${FIELD_LABELS[f.type]} · ${who}`}
                       >
                         <span className="truncate px-1">
-                          {fieldIcon(f.type)} {f.label || (f.type === "signature" && doc.signature_mode === "qualified" ? "Assinatura CC" : FIELD_LABELS[f.type])}
+                          <FieldIcon type={f.type} className="mr-0.5 inline h-3 w-3 align-[-2px]" />{f.label || (f.type === "signature" && doc.signature_mode === "qualified" ? "Assinatura CC" : FIELD_LABELS[f.type])}
                           {f.required && f.type !== "checkbox" && !isAutoField(f.type) && !f.readonly ? " *" : ""}
                           {f.value ? <span className="font-normal text-slate-700"> = {f.type === "checkbox" ? (f.value === "true" ? "✓" : "—") : f.value}</span> : null}
                           {f.readonly ? " 🔒" : ""}
                         </span>
                         <span
-                          className="absolute right-0 bottom-0 h-2.5 w-2.5 cursor-se-resize opacity-0 group-hover:opacity-100"
+                          className={`absolute right-0 bottom-0 cursor-se-resize opacity-0 group-hover:opacity-100 ${sel ? "h-4 w-4" : "h-2.5 w-2.5"}`}
                           style={{ background: color, opacity: sel ? 1 : undefined }}
                           onPointerDown={(e) => startDrag(e, f, "resize", size)}
                         />
@@ -613,8 +621,8 @@ function RecipientsPanel({
                 </div>
               </div>
               <div className="flex flex-col">
-                <button className="rounded p-0.5 text-slate-400 hover:text-slate-800 disabled:opacity-30" disabled={i === 0} onClick={() => onMove(r.id, -1)} aria-label="Subir"><ArrowUp className="h-4 w-4" /></button>
-                <button className="rounded p-0.5 text-slate-400 hover:text-slate-800 disabled:opacity-30" disabled={i === ordered.length - 1} onClick={() => onMove(r.id, 1)} aria-label="Descer"><ArrowDown className="h-4 w-4" /></button>
+                <button className="rounded p-0.5 text-slate-500 hover:text-slate-800 disabled:opacity-30" disabled={i === 0} onClick={() => onMove(r.id, -1)} aria-label="Subir"><ArrowUp className="h-4 w-4" /></button>
+                <button className="rounded p-0.5 text-slate-500 hover:text-slate-800 disabled:opacity-30" disabled={i === ordered.length - 1} onClick={() => onMove(r.id, 1)} aria-label="Descer"><ArrowDown className="h-4 w-4" /></button>
               </div>
               <button className="rounded p-1 text-slate-400 hover:text-red-600" onClick={() => onRemove(r.id)} aria-label="Remover"><TrashIcon className="h-4 w-4" /></button>
             </div>
@@ -738,7 +746,7 @@ function FieldProps({ field, signers, qualified, onChange, onDelete }: { field: 
           Obrigatório
         </label>
       )}
-      <p className="text-xs text-slate-400">Arraste para mover; use o canto inferior direito para redimensionar. Tecla Delete apaga.</p>
+      <p className="text-xs text-slate-500">Arraste para mover; use o canto inferior direito para redimensionar. Tecla Delete apaga.</p>
     </div>
   );
 }
@@ -806,7 +814,7 @@ function PackagePanel({ parts, isPackage, busy, fieldsPerPart, onAdd, onRename, 
           <ol className="divide-y divide-slate-100 rounded-lg border border-slate-200">
             {parts.map((p, i) => (
               <li key={i} className="flex items-center gap-1 px-2 py-1.5">
-                <a href={`#parte-${i + 1}`} className="w-5 shrink-0 text-right text-xs font-medium text-slate-400 tabular-nums hover:text-navy-700" title="Ir para o documento">{i + 1}</a>
+                <a href={`#parte-${i + 1}`} className="w-5 shrink-0 text-right text-xs font-medium text-slate-500 tabular-nums hover:text-navy-700" title="Ir para o documento">{i + 1}</a>
                 <div className="min-w-0 flex-1">
                   <input
                     className="input py-1 text-sm"
@@ -915,10 +923,10 @@ function ReviewModal({ open, onClose, doc, recipients, fields, issues, onSent }:
           <ol className="divide-y divide-slate-100 rounded-lg border border-slate-200">
             {ordered.map((r, i) => (
               <li key={r.id} className="flex items-center gap-3 px-3 py-2">
-                <span className="w-5 text-center text-xs text-slate-400">{r.role === "signer" && doc.sequential ? i + 1 : ""}</span>
+                <span className="w-5 text-center text-xs text-slate-500">{r.role === "signer" && doc.sequential ? i + 1 : ""}</span>
                 <span className="h-2.5 w-2.5 rounded-full" style={{ background: r.color }} />
-                <span className="min-w-0 flex-1 truncate">{r.name} <span className="text-slate-400">· {r.email}</span></span>
-                <span className="text-xs text-slate-500">{r.role === "signer" ? `${fields.filter((f) => f.recipient_id === r.id).length} campos` : "cópia"}</span>
+                <span className="min-w-0 flex-1 truncate">{r.name} <span className="text-slate-500">· {r.email}</span></span>
+                <span className="text-xs text-slate-500">{r.role === "signer" ? plural(fields.filter((f) => f.recipient_id === r.id).length, "campo", "campos") : "cópia"}</span>
               </li>
             ))}
           </ol>

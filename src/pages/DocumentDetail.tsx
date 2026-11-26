@@ -10,6 +10,7 @@ import { PdfPages } from "../components/PdfPages";
 import { PartsIndex } from "../components/Parts";
 import { errorMessage, fmtDateTime } from "../lib/format";
 import { useAuth } from "../auth/AuthProvider";
+import { confirmAction, promptText } from "../components/dialogs";
 
 // O token do link nunca é lido pelo cliente (sem permissão nessa coluna).
 const RECIPIENT_COLUMNS =
@@ -94,7 +95,7 @@ export function DocumentDetail() {
   }
 
   async function act(action: "cancel" | "remind", rid?: string) {
-    if (action === "cancel" && !confirm("Cancelar o documento? Os links deixam de funcionar.")) return;
+    if (action === "cancel" && !(await confirmAction({ title: "Cancelar documento", message: "Os links de assinatura deixam de funcionar. Esta ação não se pode desfazer.", confirmLabel: "Cancelar documento", danger: true }))) return;
     setBusy(true);
     try {
       await documentAction(action, doc!.id, rid);
@@ -152,8 +153,8 @@ export function DocumentDetail() {
               className="btn-ghost"
               disabled={busy}
               onClick={async () => {
-                const name = prompt("Nome do modelo (usa o PDF original, os destinatários e os campos deste documento):", doc.title);
-                if (!name?.trim()) return;
+                const name = await promptText({ title: "Guardar como modelo", message: "O modelo usa o PDF original, os destinatários e os campos deste documento.", label: "Nome do modelo", defaultValue: doc.title, confirmLabel: "Criar modelo" });
+                if (!name) return;
                 setBusy(true);
                 try {
                   const tid = await instantiate({ sourceId: doc.id, sourcePath: doc.original_path!, asTemplate: true, title: name.trim(), workspaceId: doc.workspace_id });
@@ -234,7 +235,7 @@ export function DocumentDetail() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
                       <p className="truncate text-sm font-medium">{r.name}</p>
-                      {r.role === "signer" ? <RecipientBadge status={r.status} /> : <span className="text-xs text-slate-400">cópia</span>}
+                      {r.role === "signer" ? <RecipientBadge status={r.status} /> : <span className="text-xs text-slate-500">cópia</span>}
                     </div>
                     {r.email && <p className="truncate text-xs text-slate-500">{r.email}</p>}
                     {r.in_person && r.role === "signer" && <p className="text-xs text-slate-500">Assinatura presencial</p>}
@@ -319,7 +320,7 @@ export function DocumentDetail() {
                         {EVENT_LABELS[e.event] ?? e.event}
                         {e.recipient_id && <span className="text-slate-500"> — {names.get(e.recipient_id)}</span>}
                       </p>
-                      <p className="text-xs text-slate-400">
+                      <p className="text-xs text-slate-500">
                         {fmtDateTime(e.created_at)}{e.ip ? ` · ${e.ip}` : ""}
                         {e.event === "recipient.cc_rejected" && typeof e.details.reason === "string" ? ` · ${e.details.reason}` : ""}
                       </p>
@@ -332,7 +333,7 @@ export function DocumentDetail() {
                 {emails.map((m) => (
                   <li key={m.id} className="text-sm">
                     <p className="truncate text-slate-800">{m.subject}</p>
-                    <p className="text-xs text-slate-400">
+                    <p className="text-xs text-slate-500">
                       {m.to_email} · {fmtDateTime(m.created_at)} ·{" "}
                       <span className={m.status === "failed" ? "text-red-700" : m.status === "skipped" ? "text-amber-700" : "text-emerald-700"}>
                         {m.status === "sent" ? "enviado" : m.status === "skipped" ? "não enviado (email desligado)" : "falhou"}
@@ -410,7 +411,7 @@ function CorrectModal({ open, onClose, doc, recipients, onDone }: { open: boolea
               <div className="mb-2 flex items-center gap-2 text-sm">
                 <span className="h-2.5 w-2.5 rounded-full" style={{ background: r.color }} />
                 <span className="font-medium">{r.name}</span>
-                {r.role === "signer" ? <RecipientBadge status={r.status} /> : <span className="text-xs text-slate-400">cópia</span>}
+                {r.role === "signer" ? <RecipientBadge status={r.status} /> : <span className="text-xs text-slate-500">cópia</span>}
               </div>
               {can ? (
                 <div className="grid gap-2 sm:grid-cols-2">

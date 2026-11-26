@@ -106,7 +106,7 @@ export function Templates() {
                   <p className="mt-1 text-sm text-slate-500">
                     {signers.length ? signers.map((s) => s.name).join(" → ") : "Sem signatários"}
                   </p>
-                  <p className="mt-1 text-xs text-slate-400">
+                  <p className="mt-1 text-xs text-slate-500">
                     {r.fields[0]?.count ?? 0} campos
                     {workspaces.length > 1 && wsName(r.workspace_id) ? ` · ${wsName(r.workspace_id)}` : ""}
                     {r.owner && r.owner_id !== profile?.id ? ` · de ${r.owner.full_name ?? r.owner.email}` : ""} · {relative(r.updated_at)}
@@ -240,7 +240,7 @@ export function UseTemplateModal({ template, onClose }: { template: TemplateRow 
                     {i + 1}
                   </span>
                   <span className="font-medium">{r.name}</span>
-                  <span className="text-xs text-slate-400">{r.role === "signer" ? "assina" : "recebe cópia"}</span>
+                  <span className="text-xs text-slate-500">{r.role === "signer" ? "assina" : "recebe cópia"}</span>
                 </div>
                 {r.group_emails?.length ? (
                   <p className="text-xs text-slate-500">Grupo de assinatura: {r.group_emails.join(", ")}</p>

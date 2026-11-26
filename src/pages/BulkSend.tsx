@@ -8,7 +8,8 @@ import { instantiate } from "../lib/templates";
 import { cellToValue, mapColumns, normalizeKey, parseCsv, parseLanguage, toCsv } from "../lib/csv";
 import { isPrefillable, type FieldType } from "../../supabase/functions/_shared/types";
 import { Alert, CheckIcon, DownloadIcon, FullPageSpinner, ModeBadge, Spinner, UploadIcon } from "../components/ui";
-import { errorMessage } from "../lib/format";
+import { errorMessage, plural } from "../lib/format";
+import { confirmAction } from "../components/dialogs";
 
 const MAX_ROWS = 200;
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -308,7 +309,7 @@ export function BulkSend() {
                   const res = results[r.line];
                   return (
                     <tr key={r.line} className={r.errors.length ? "bg-red-50/60" : ""}>
-                      <td className="px-3 py-2 text-slate-400">{r.line}</td>
+                      <td className="px-3 py-2 text-slate-500">{r.line}</td>
                       <td className="px-3 py-2">
                         <span className="block font-medium">{r.name || "—"}</span>
                         <span className="block text-xs text-slate-500">{r.email}</span>
@@ -340,9 +341,9 @@ export function BulkSend() {
 
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm text-slate-600">
-              {valid.length} de {rows.length} linha(s) válida(s)
+              {valid.length} de {plural(rows.length, "linha válida", "linhas válidas")}
               {rows.length - valid.length > 0 && " — as linhas com erro não são enviadas (corrija o ficheiro e carregue de novo)"}
-              {started && ` · ${done} enviado(s)${failed.length ? ` · ${failed.length} com falha` : ""}`}.
+              {started && ` · ${plural(done, "enviado", "enviados")}${failed.length ? ` · ${failed.length} com falha` : ""}`}.
             </p>
             <div className="flex gap-2">
               {batchId && !running && (
@@ -356,7 +357,7 @@ export function BulkSend() {
                   className="btn-primary"
                   disabled={running || valid.length === 0 || fixedMissing.length > 0 || !variable || !pattern.trim()}
                   onClick={() => {
-                    if (confirm(`Criar e enviar ${valid.length} documento(s)? Cada pessoa recebe o seu por email.`)) run();
+                    confirmAction({ title: "Enviar documentos", message: `Vão ser criados e enviados ${valid.length === 1 ? "1 documento" : `${valid.length} documentos`}. Cada pessoa recebe o seu por email.`, confirmLabel: "Enviar" }).then((ok) => { if (ok) run(); });
                   }}
                 >
                   Enviar {valid.length} documento(s)

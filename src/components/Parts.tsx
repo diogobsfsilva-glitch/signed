@@ -13,9 +13,9 @@ export function PartsIndex({ parts, action, className = "" }: { parts: DocPart[]
       <ol className="mt-1.5 space-y-0.5 text-sm">
         {partRanges(parts).map((p, i) => (
           <li key={i} className="flex items-center gap-2">
-            <span className="w-5 shrink-0 text-right text-xs text-slate-400 tabular-nums">{i + 1}.</span>
+            <span className="w-5 shrink-0 text-right text-xs text-slate-500 tabular-nums">{i + 1}.</span>
             <a href={`#parte-${i + 1}`} className="min-w-0 flex-1 truncate text-navy-800 hover:underline">{p.name}</a>
-            <span className="shrink-0 text-xs text-slate-400">{p.from === p.to ? t("pkg_page", { from: p.from }) : t("pkg_pages", { from: p.from, to: p.to })}</span>
+            <span className="shrink-0 text-xs text-slate-500">{p.from === p.to ? t("pkg_page", { from: p.from }) : t("pkg_pages", { from: p.from, to: p.to })}</span>
             {action?.(i)}
           </li>
         ))}

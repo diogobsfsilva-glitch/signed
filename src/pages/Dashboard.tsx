@@ -4,8 +4,9 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthProvider";
 import type { DocStatus } from "../../supabase/functions/_shared/types";
 import { EmptyState, FolderIcon, FullPageSpinner, ModeBadge, Modal, PlusIcon, StatusBadge, toast } from "../components/ui";
-import { errorMessage, relative } from "../lib/format";
+import { errorMessage, plural, relative } from "../lib/format";
 import { documentAction } from "../lib/api";
+import { confirmAction } from "../components/dialogs";
 
 interface Row {
   id: string;
@@ -63,7 +64,7 @@ export function Dashboard() {
   async function bulk(action: "remind" | "cancel") {
     // Só os selecionados que continuam visíveis com o filtro atual.
     const ids = [...picked].filter((id) => filtered.some((r) => r.id === id && r.status === "in_progress"));
-    if (action === "cancel" && !confirm(`Cancelar ${ids.length} documento(s)? Os links deixam de funcionar.`)) return;
+    if (action === "cancel" && !(await confirmAction({ title: `Cancelar ${ids.length === 1 ? "1 documento" : `${ids.length} documentos`}`, message: "Os links de assinatura deixam de funcionar. Esta ação não se pode desfazer.", confirmLabel: "Cancelar documentos", cancelLabel: "Voltar", danger: true }))) return;
     setBulkBusy(true);
     let ok = 0;
     const errors: string[] = [];
@@ -78,7 +79,7 @@ export function Dashboard() {
     setBulkBusy(false);
     setPicked(new Set());
     toast(
-      `${ok} ${action === "remind" ? "lembrete(s) enviado(s)" : "documento(s) cancelado(s)"}${errors.length ? `. Com erro: ${errors.slice(0, 3).join("; ")}${errors.length > 3 ? ` e mais ${errors.length - 3}` : ""}` : ""}.`,
+      `${action === "remind" ? plural(ok, "lembrete enviado", "lembretes enviados") : plural(ok, "documento cancelado", "documentos cancelados")}${errors.length ? `. Com erro: ${errors.slice(0, 3).join("; ")}${errors.length > 3 ? ` e mais ${errors.length - 3}` : ""}` : ""}.`,
       errors.length ? "error" : "ok",
     );
     load();
@@ -154,14 +155,15 @@ export function Dashboard() {
           <h1 className="text-2xl font-semibold tracking-tight">Documentos</h1>
           <p className="muted mt-0.5">Olá, {profile?.full_name?.split(" ")[0]}. {counts.progress ? `${counts.progress} em curso.` : "Nada pendente."}</p>
         </div>
-        <Link to="/novo" className="btn-primary">
+        {/* No computador, o botão está no menu lateral. */}
+        <Link to="/novo" className="btn-primary lg:hidden">
           <PlusIcon className="h-4 w-4" /> Novo documento
         </Link>
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[200px_1fr]">
         <aside className="hidden lg:block">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Pastas</p>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Pastas</p>
           <div className="flex flex-col gap-0.5">
             <button className={`rounded-md px-2.5 py-1.5 text-left text-sm ${!folder ? "bg-navy-50 font-medium text-navy-900" : "text-slate-700 hover:bg-slate-100"}`} onClick={() => set("pasta", null)}>
               Todas
@@ -233,7 +235,7 @@ export function Dashboard() {
               <>
               {picked.size > 0 && (
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-navy-50 px-3 py-2 text-sm text-navy-900">
-                  <span><strong>{picked.size}</strong> documento(s) em curso selecionado(s)</span>
+                  <span><strong>{picked.size}</strong> {picked.size === 1 ? "documento em curso selecionado" : "documentos em curso selecionados"}</span>
                   <span className="flex gap-2">
                     <button className="btn-secondary py-1" disabled={bulkBusy} onClick={() => bulk("remind")}>Enviar lembrete</button>
                     <button className="btn-danger py-1" disabled={bulkBusy} onClick={() => bulk("cancel")}>Cancelar</button>
@@ -266,19 +268,20 @@ export function Dashboard() {
                           <p className="truncate font-medium text-slate-900">{r.title}</p>
                           <p className="mt-0.5 truncate text-sm text-slate-500">
                             {signers.length ? signers.map((s) => s.name).join(", ") : "Sem destinatários"}
-                            {!mine && r.owner && <span className="text-slate-400"> · de {r.owner.full_name ?? r.owner.email}</span>}
+                            {!mine && r.owner && <span className="text-slate-500"> · de {r.owner.full_name ?? r.owner.email}</span>}
                           </p>
                         </div>
-                        <div className="flex shrink-0 items-center gap-3">
-                          {r.parts && r.parts.length > 1 && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" title={r.parts.map((p) => p.name).join("\n")}>Pacote · {r.parts.length}</span>}
-                          <ModeBadge mode={r.signature_mode} />
+                        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 whitespace-nowrap">
+                          <StatusBadge status={r.status} />
                           {r.status === "in_progress" && (
                             <span className="text-xs tabular-nums text-slate-500">
                               {done}/{signers.length} assinaram
                             </span>
                           )}
-                          <StatusBadge status={r.status} />
-                          <span className="w-20 text-right text-xs text-slate-400">{relative(r.updated_at)}</span>
+                          {r.parts && r.parts.length > 1 && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" title={r.parts.map((p) => p.name).join("\n")}>Pacote · {r.parts.length}</span>}
+                          {/* "Assinatura simples" é o normal: só aparece no ecrã largo; o Cartão de Cidadão aparece sempre. */}
+                          <span className={r.signature_mode === "simple" ? "hidden md:inline-flex" : "inline-flex"}><ModeBadge mode={r.signature_mode} /></span>
+                          <span className="ml-auto text-xs text-slate-500 sm:ml-0 sm:w-20 sm:text-right">{relative(r.updated_at)}</span>
                         </div>
                       </button>
                     </li>

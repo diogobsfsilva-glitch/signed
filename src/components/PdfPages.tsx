@@ -91,7 +91,7 @@ export function PdfPages({ src, overlay, onPageClick, onLoaded, cursor, parts }:
                   <PageCanvas doc={doc} page={i + 1} width={width} height={h} />
                   {overlay && <div className="absolute inset-0">{overlay(i + 1, { width, height: h })}</div>}
                 </div>
-                <div className="mt-1 text-center text-xs text-slate-400">
+                <div className="mt-1 text-center text-xs text-slate-500">
                   {t("page_of", { i: i + 1, n: sizes.length })}
                 </div>
               </div>

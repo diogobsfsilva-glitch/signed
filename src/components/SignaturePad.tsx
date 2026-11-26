@@ -69,20 +69,32 @@ export function SignaturePad({
     setUploaded(null);
   }, [open, kind, defaultName]);
 
+  // Prepara o canvas ao abrir o separador "Desenhar" e sempre que muda de tamanho (ex.: rodar o telemóvel).
+  // Mudar o tamanho apaga o desenho, por isso o botão "Usar" volta a ficar desativado.
   useEffect(() => {
     if (!open || tab !== "draw") return;
     const c = canvas.current;
     if (!c) return;
-    const dpr = window.devicePixelRatio || 1;
-    const r = c.getBoundingClientRect();
-    c.width = r.width * dpr;
-    c.height = r.height * dpr;
-    const ctx = c.getContext("2d")!;
-    ctx.scale(dpr, dpr);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 2.4;
+    let w = 0;
+    const setup = () => {
+      const r = c.getBoundingClientRect();
+      if (Math.round(r.width) === w) return;
+      w = Math.round(r.width);
+      const dpr = window.devicePixelRatio || 1;
+      c.width = r.width * dpr;
+      c.height = r.height * dpr;
+      const ctx = c.getContext("2d")!;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2.4;
+      setEmpty(true);
+    };
+    setup();
+    const ro = new ResizeObserver(setup);
+    ro.observe(c);
+    return () => ro.disconnect();
   }, [open, tab]);
 
   function pos(e: React.PointerEvent) {
@@ -114,7 +126,12 @@ export function SignaturePad({
     const url = URL.createObjectURL(f);
     const img = new Image();
     img.src = url;
-    await img.decode();
+    try {
+      await img.decode();
+    } catch {
+      URL.revokeObjectURL(url);
+      return;
+    }
     const scale = Math.min(1, 800 / img.width, 300 / img.height);
     const c = document.createElement("canvas");
     c.width = Math.round(img.width * scale);
@@ -191,6 +208,10 @@ export function SignaturePad({
               setEmpty(false);
             }}
             onPointerUp={() => {
+              drawing.current = false;
+              last.current = null;
+            }}
+            onPointerCancel={() => {
               drawing.current = false;
               last.current = null;
             }}

@@ -1,8 +1,28 @@
+import type { ReactNode } from "react";
 import type { FieldType } from "../../supabase/functions/_shared/types";
 import { FIELD_LABELS, parseAttachment } from "../../supabase/functions/_shared/types";
 
-export function fieldIcon(type: FieldType): string {
-  return { signature: "✍", initials: "AB", text: "T", date: "📅", checkbox: "☑", radio: "◉", dropdown: "▾", name: "👤", email: "@", signed_date: "🗓", attachment: "📎" }[type];
+/** Ícone de cada tipo de campo (desenhado, igual em todos os sistemas; os emojis mudavam de aspeto). */
+const FIELD_PATHS: Record<FieldType, ReactNode> = {
+  signature: <path d="M3 17c3-1 4.5-7 7-7 2 0 1 5 3 5s2.5-3 4-3 1.5 2 4 2M3 21h18" />,
+  initials: <path d="M4 18l3.5-10L11 18M5.3 14.5h4.4M14 8h3.5a2.5 2.5 0 0 1 0 5H14zm0 5h4a2.5 2.5 0 0 1 0 5h-4z" />,
+  text: <path d="M5 6h14M12 6v13M9 19h6" />,
+  date: <><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M4 10h16M9 3v4M15 3v4" /></>,
+  checkbox: <><rect x="4" y="4" width="16" height="16" rx="3" /><path d="M8 12l3 3 5-6" /></>,
+  radio: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" fill="currentColor" /></>,
+  dropdown: <><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M14 11l2 2 2-2" /></>,
+  name: <><circle cx="12" cy="8" r="4" /><path d="M5 20c1-4 4-6 7-6s6 2 7 6" /></>,
+  email: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M4 7l8 6 8-6" /></>,
+  signed_date: <><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M4 10h16M9 3v4M15 3v4M9 15l2 2 4-4" /></>,
+  attachment: <path d="M20 11l-8 8a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7" />,
+};
+
+export function FieldIcon({ type, className = "h-4 w-4" }: { type: FieldType; className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {FIELD_PATHS[type]}
+    </svg>
+  );
 }
 
 /** Mostra o valor de um campo já preenchido (só leitura). */

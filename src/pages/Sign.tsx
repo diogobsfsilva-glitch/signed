@@ -350,17 +350,40 @@ function FillAndSign({ token, session, info, onFinished }: { token: string; sess
   const { t, tn, error: errText } = useT();
 
   const editable = info.fields.filter((f) => f.editable);
-  const missing = editable.filter((f) => f.required && !(f.type === "checkbox" ? values[f.id] === "true" : values[f.id]));
+  const isFilled = (f: SField) => (f.type === "checkbox" ? values[f.id] === "true" : !!values[f.id]);
+  const missing = editable.filter((f) => f.required && !isFilled(f));
   const ordered = useMemo(() => [...editable].sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x), [editable]);
+  const small = useIsSmall();
+  // Campo aberto no painel de baixo (preenchimento guiado, sobretudo no telemóvel).
+  const [active, setActive] = useState<string | null>(null);
+  const activeField = ordered.find((f) => f.id === active) ?? null;
+  const [zoom, setZoom] = useState(1);
+
+  function goTo(f: SField) {
+    setActive(f.id);
+    setTimeout(() => {
+      document.querySelector(`[data-field="${f.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    }, 50);
+    setAttention(f.id);
+    setTimeout(() => setAttention(null), 1600);
+  }
 
   function goNext() {
-    const next = ordered.find((f) => f.required && !(f.type === "checkbox" ? values[f.id] === "true" : values[f.id])) ?? ordered[0];
+    const next = ordered.find((f) => f.required && !isFilled(f)) ?? ordered[0];
     if (!next) return;
-    const el = document.querySelector(`[data-field="${next.id}"]`);
-    el?.scrollIntoView({ behavior: "smooth", block: "center" });
-    setAttention(next.id);
-    setTimeout(() => setAttention(null), 1600);
+    goTo(next);
     if ((next.type === "signature" || next.type === "initials") && !values[next.id]) setPad(next);
+  }
+
+  function step(dir: 1 | -1) {
+    const i = ordered.findIndex((f) => f.id === active);
+    const target = ordered[i + dir];
+    if (target) return goTo(target);
+    if (dir === 1) {
+      const left = ordered.find((f) => f.required && !isFilled(f));
+      if (left) return goTo(left);
+      setActive(null);
+    }
   }
 
   async function submit() {
@@ -379,20 +402,24 @@ function FillAndSign({ token, session, info, onFinished }: { token: string; sess
   }
 
   const color = info.recipient.color;
+  const setValue = (fid: string, v: string) => setValues((x) => ({ ...x, [fid]: v }));
+  const onFile = (fid: string) => (path: string, name: string) => {
+    setValues((x) => ({ ...x, [fid]: path }));
+    setFileNames((x) => ({ ...x, [fid]: name }));
+  };
 
   return (
-    <div className="pb-40">
-      {interactive && editable.length > 0 && (
-        <div className="mb-4 flex items-center justify-between gap-3 rounded-lg bg-white px-4 py-3 text-sm shadow-sm">
-          <span>
-            {missing.length ? tn("missing", { n: <strong>{missing.length}</strong> }) : <span className="text-emerald-700">{t("all_filled")}</span>}
-            {info.step === "fill" && <span className="block text-xs text-slate-500">{t("fill_phase_note")}</span>}
-          </span>
-          {missing.length > 0 && <button className="btn-primary" onClick={goNext}>{Object.keys(values).length ? t("next") : t("start")}</button>}
+    <div className={activeField ? "pb-80" : "pb-40"}>
+      {small && (
+        <div className="mb-2 flex items-center justify-end gap-1">
+          <button className="btn-secondary h-9 w-9 justify-center p-0 text-lg" onClick={() => setZoom((z) => Math.max(1, z - 0.5))} disabled={zoom <= 1} aria-label={t("zoom_out")}>−</button>
+          <span className="w-14 text-center text-sm tabular-nums text-slate-600">{Math.round(zoom * 100)}%</span>
+          <button className="btn-secondary h-9 w-9 justify-center p-0 text-lg" onClick={() => setZoom((z) => Math.min(3, z + 0.5))} disabled={zoom >= 3} aria-label={t("zoom_in")}>+</button>
         </div>
       )}
 
-      <div className="mx-auto max-w-[860px]">
+      <div className="mx-auto max-w-[860px] overflow-x-auto">
+        <div style={{ width: `${zoom * 100}%` }}>
         <PdfPages
           src={info.pdfUrl}
           parts={info.document.parts}
@@ -410,41 +437,79 @@ function FillAndSign({ token, session, info, onFinished }: { token: string; sess
                   color={color}
                   value={values[f.id] ?? null}
                   interactive={interactive && f.editable}
-                  attention={attention === f.id}
+                  attention={attention === f.id || active === f.id}
                   heightPx={f.h * size.height}
                   recipientName={info.recipient.name}
                   fileName={fileNames[f.id]}
                   token={token}
                   session={session}
-                  onChange={(v) => setValues((x) => ({ ...x, [f.id]: v }))}
-                  onFile={(path, name) => {
-                    setValues((x) => ({ ...x, [f.id]: path }));
-                    setFileNames((x) => ({ ...x, [f.id]: name }));
+                  compact={small}
+                  onOpen={() => goTo(f)}
+                  onChange={(v) => setValue(f.id, v)}
+                  onFile={onFile(f.id)}
+                  onSign={() => {
+                    if (small) goTo(f);
+                    setPad(f);
                   }}
-                  onSign={() => setPad(f)}
                 />
               ))}
             </>
           )}
         />
+        </div>
       </div>
 
       {interactive && (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 backdrop-blur">
-          <div className="mx-auto flex max-w-5xl flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center">
-            {info.step === "sign_simple" ? (
-              <label className="flex flex-1 items-start gap-2 text-xs text-slate-600">
-                <input type="checkbox" className="mt-0.5" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
-                {t("consent_sign")}
-              </label>
-            ) : (
-              <p className="flex-1 text-xs text-slate-600">{t("consent_fill")}</p>
-            )}
-            {error && <div className="sm:max-w-sm"><Alert>{error}</Alert></div>}
-            <button className="btn-primary px-6 py-2.5" disabled={busy || missing.length > 0 || (info.step === "sign_simple" && !agree)} onClick={submit}>
-              {busy && <Spinner className="h-4 w-4 text-white" />} {info.step === "sign_simple" ? t("sign_document") : t("submit_data")}
-            </button>
-          </div>
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 shadow-[0_-4px_16px_rgba(15,36,69,0.08)] backdrop-blur">
+          {activeField ? (
+            <FieldSheet
+              f={activeField}
+              index={ordered.indexOf(activeField) + 1}
+              total={ordered.length}
+              value={values[activeField.id] ?? null}
+              fileName={fileNames[activeField.id]}
+              token={token}
+              session={session}
+              onChange={(v) => setValue(activeField.id, v)}
+              onFile={onFile(activeField.id)}
+              onSign={() => setPad(activeField)}
+              onPrev={() => step(-1)}
+              onNext={() => step(1)}
+              onClose={() => setActive(null)}
+            />
+          ) : (
+            <div className="mx-auto flex max-w-5xl flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
+              {missing.length > 0 ? (
+                <>
+                  <p className="flex-1 text-sm text-slate-700">
+                    {missing.length === 1 ? t("missing_one") : tn("missing", { n: <strong>{missing.length}</strong> })}
+                    {info.step === "fill" && <span className="block text-xs text-slate-500">{t("fill_phase_note")}</span>}
+                  </p>
+                  <button className="btn-primary px-6 py-2.5" onClick={goNext}>{Object.keys(values).length ? t("fill_missing") : t("start")}</button>
+                </>
+              ) : (
+                <>
+                  {info.step === "sign_simple" ? (
+                    <label className="flex flex-1 items-start gap-2 text-xs text-slate-600">
+                      <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
+                      {t("consent_sign")}
+                    </label>
+                  ) : (
+                    <p className="flex-1 text-xs text-slate-600">{t("consent_fill")}</p>
+                  )}
+                  {error && <div className="sm:max-w-sm"><Alert>{error}</Alert></div>}
+                  <button
+                    className="btn-primary px-6 py-2.5"
+                    disabled={busy || (info.step === "sign_simple" && !agree)}
+                    title={info.step === "sign_simple" && !agree ? t("need_consent") : undefined}
+                    onClick={submit}
+                  >
+                    {busy && <Spinner className="h-4 w-4 text-white" />} {info.step === "sign_simple" ? t("sign_document") : t("submit_data")}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -469,9 +534,11 @@ function FillAndSign({ token, session, info, onFinished }: { token: string; sess
   );
 }
 
-function SignerField({ f, color, value, interactive, attention, heightPx, recipientName, fileName, token, session, onChange, onFile, onSign }: {
+function SignerField({ f, color, value, interactive, attention, heightPx, recipientName, fileName, token, session, compact, onOpen, onChange, onFile, onSign }: {
   f: SField; color: string; value: string | null; interactive: boolean; attention: boolean; heightPx: number;
   recipientName: string; fileName?: string; token: string; session: string;
+  /** Ecrã pequeno: o campo é só um botão; preenche-se no painel de baixo, com letra grande. */
+  compact: boolean; onOpen: () => void;
   onChange: (v: string) => void; onFile: (path: string, name: string) => void; onSign: () => void;
 }) {
   const { t, field } = useT();
@@ -494,6 +561,23 @@ function SignerField({ f, color, value, interactive, attention, heightPx, recipi
   }
   const box = `absolute overflow-hidden rounded-sm border-2 ${ring}`;
   const bg = empty ? `${color}1a` : "transparent";
+  if (compact && f.type !== "signature" && f.type !== "initials") {
+    const shown = f.type === "checkbox" ? (value === "true" ? "✓" : "")
+      : f.type === "date" && value ? value.split("-").reverse().join("/")
+      : f.type === "attachment" ? (fileName ?? (value ? t("file_loaded") : `📎 ${f.label || t("attach_file")}`))
+      : value || `${f.label || field(f.type)}${f.required ? " *" : ""}`;
+    return (
+      <button
+        data-field={f.id}
+        className={`${box} flex items-center text-left ${f.type === "checkbox" ? "font-bold" : "px-1"}`}
+        style={{ ...style, borderColor: color, background: empty ? `${color}1a` : "white", fontSize: fs, color: value ? "#0f2445" : color, justifyContent: f.type === "checkbox" ? "center" : undefined }}
+        onClick={onOpen}
+        aria-label={f.label || field(f.type)}
+      >
+        <span className="truncate">{shown}</span>
+      </button>
+    );
+  }
   switch (f.type) {
     case "signature":
     case "initials":
@@ -546,9 +630,8 @@ function SignerField({ f, color, value, interactive, attention, heightPx, recipi
   }
 }
 
-function AttachmentField({ f, box, style, fs, fileName, token, session, onFile }: {
-  f: SField; box: string; style: React.CSSProperties; fs: number; fileName?: string; token: string; session: string; onFile: (path: string, name: string) => void;
-}) {
+/** Carregamento de um anexo do signatário (usado no campo e no painel de baixo). */
+function useAttachmentUpload(f: SField, token: string, session: string, onFile: (path: string, name: string) => void) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { t, error: errText } = useT();
@@ -569,8 +652,16 @@ function AttachmentField({ f, box, style, fs, fileName, token, session, onFile }
       setBusy(false);
     }
   }
+  return { busy, error, pick };
+}
+
+function AttachmentField({ f, box, style, fs, fileName, token, session, onFile }: {
+  f: SField; box: string; style: React.CSSProperties; fs: number; fileName?: string; token: string; session: string; onFile: (path: string, name: string) => void;
+}) {
+  const { t } = useT();
+  const { busy, error, pick } = useAttachmentUpload(f, token, session, onFile);
   return (
-    <label data-field={f.id} className={`${box} flex cursor-pointer items-center justify-center gap-1 px-1`} style={style} title={error ?? f.label ?? "Anexo"}>
+    <label data-field={f.id} className={`${box} flex cursor-pointer items-center justify-center gap-1 px-1`} style={style} title={error ?? f.label ?? t("attach_file")}>
       <input type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" className="sr-only" onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} disabled={busy} />
       <span className="truncate font-semibold" style={{ fontSize: Math.min(fs, 12), color: error ? "#b91c1c" : undefined }}>
         {busy ? t("uploading") : error ? `⚠ ${error}` : fileName ? `📎 ${fileName}` : `📎 ${f.label || t("attach_file")}${f.required ? " *" : ""}`}
@@ -784,8 +875,116 @@ function Done({ kind, title, hostDoc }: { kind: "signed" | "filled" | "declined"
           <Link to={`/documentos/${hostDoc}`} className="btn-secondary mt-3">Voltar ao documento (colaborador)</Link>
         </div>
       ) : (
-        <p className="mt-6 text-xs text-slate-400">{t("close_page")}</p>
+        <p className="mt-6 text-xs text-slate-500">{t("close_page")}</p>
       )}
+    </div>
+  );
+}
+
+/** Ecrã estreito (telemóvel na vertical). */
+function useIsSmall(): boolean {
+  const q = "(max-width: 639px)";
+  const [small, setSmall] = useState(() => typeof window !== "undefined" && window.matchMedia(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia(q);
+    const h = () => setSmall(m.matches);
+    m.addEventListener("change", h);
+    return () => m.removeEventListener("change", h);
+  }, []);
+  return small;
+}
+
+/** Painel de baixo: um campo de cada vez, com controlos de tamanho normal. */
+function FieldSheet({ f, index, total, value, fileName, token, session, onChange, onFile, onSign, onPrev, onNext, onClose }: {
+  f: SField; index: number; total: number; value: string | null; fileName?: string; token: string; session: string;
+  onChange: (v: string) => void; onFile: (path: string, name: string) => void; onSign: () => void;
+  onPrev: () => void; onNext: () => void; onClose: () => void;
+}) {
+  const { t, field } = useT();
+  const { busy, error, pick } = useAttachmentUpload(f, token, session, onFile);
+  const label = f.label || field(f.type);
+  let input: React.ReactNode;
+  switch (f.type) {
+    case "signature":
+    case "initials":
+      input = value ? (
+        <div className="flex items-center gap-3">
+          <img src={value} alt="" className="h-14 max-w-[60%] rounded border border-slate-200 bg-white object-contain" />
+          <button className="btn-secondary" onClick={onSign}>{t("change")}</button>
+        </div>
+      ) : (
+        <button className="btn-primary w-full py-3" onClick={onSign}>{f.type === "signature" ? t("sign_here") : field("initials")}</button>
+      );
+      break;
+    case "checkbox":
+      input = (
+        <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 px-3 py-3 text-base">
+          <input type="checkbox" className="h-5 w-5" checked={value === "true"} onChange={(e) => onChange(e.target.checked ? "true" : "false")} />
+          {label}
+        </label>
+      );
+      break;
+    case "radio":
+      input = (
+        <div className="space-y-1.5" role="radiogroup" aria-label={label}>
+          {(f.options ?? []).map((o) => (
+            <label key={o} className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-base ${value === o ? "border-navy-500 bg-navy-50" : "border-slate-200"}`}>
+              <input type="radio" name={`sheet-${f.id}`} className="h-5 w-5" checked={value === o} onChange={() => onChange(o)} /> {o}
+            </label>
+          ))}
+        </div>
+      );
+      break;
+    case "dropdown":
+      input = (
+        <select className="input text-base" value={value ?? ""} onChange={(e) => onChange(e.target.value)} aria-label={label}>
+          <option value="">{t("choose")}</option>
+          {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      );
+      break;
+    case "date":
+      input = <input type="date" className="input text-base" value={value ?? ""} onChange={(e) => onChange(e.target.value)} aria-label={label} />;
+      break;
+    case "attachment":
+      input = (
+        <>
+          <label className={`btn-secondary w-full cursor-pointer justify-center py-3 ${busy ? "pointer-events-none opacity-60" : ""}`}>
+            <input type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" className="sr-only" onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} disabled={busy} />
+            {busy ? t("uploading") : fileName ? `📎 ${fileName}` : value ? `📎 ${t("file_loaded")}` : `📎 ${t("attach_file")}`}
+          </label>
+          {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
+        </>
+      );
+      break;
+    default:
+      input = (
+        <input
+          className="input text-base"
+          value={value ?? ""}
+          maxLength={500}
+          autoFocus
+          enterKeyHint={index === total ? "done" : "next"}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && onNext()}
+          aria-label={label}
+        />
+      );
+  }
+  return (
+    <div className="mx-auto max-w-xl px-4 pt-2 pb-3">
+      <div className="flex items-center justify-between text-xs text-slate-500">
+        <span>{t("field_of", { i: index, n: total })}</span>
+        <button className="px-2 py-1 font-medium text-slate-600 hover:text-slate-900" onClick={onClose}>{t("close")}</button>
+      </div>
+      <p className="mb-2 font-medium text-slate-900">
+        {label} {f.required ? <span className="text-red-700">*</span> : <span className="text-xs font-normal text-slate-500">({t("optional")})</span>}
+      </p>
+      {input}
+      <div className="mt-3 flex gap-2">
+        <button className="btn-secondary" onClick={onPrev} disabled={index === 1}>{t("previous")}</button>
+        <button className="btn-primary flex-1 justify-center py-2.5" onClick={onNext}>{index === total ? t("finish_fields") : t("next")}</button>
+      </div>
     </div>
   );
 }

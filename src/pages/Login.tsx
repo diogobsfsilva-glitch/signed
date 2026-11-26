@@ -93,7 +93,7 @@ export function Login() {
 
           {(DEV || testMode) && (
             <form onSubmit={dev} className="mt-8 space-y-3 border-t border-slate-200 pt-6">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-400">{DEV ? "Desenvolvimento" : "Modo de teste"}</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{DEV ? "Desenvolvimento" : "Modo de teste"}</p>
               <input className="input" type="email" placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
               <input className="input" type="password" placeholder="palavra-passe" value={password} onChange={(e) => setPassword(e.target.value)} required />
               <button className="btn-primary w-full" disabled={busy}>

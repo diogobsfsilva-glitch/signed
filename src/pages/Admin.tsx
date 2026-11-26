@@ -4,7 +4,8 @@ import { useAuth, type Profile } from "../auth/AuthProvider";
 import { Alert, FullPageSpinner, Modal, PlusIcon, Spinner, TrashIcon, toast } from "../components/ui";
 import { BrandMark, luminance } from "../components/Brand";
 import { m365Test, type M365TestResult } from "../lib/api";
-import { errorMessage, fmtDate } from "../lib/format";
+import { errorMessage, fmtDate, plural } from "../lib/format";
+import { confirmAction } from "../components/dialogs";
 
 type Tab = "workspaces" | "users" | "settings";
 
@@ -76,7 +77,7 @@ function Workspaces() {
           <button key={w.id} className="card p-4 text-left hover:border-navy-200" onClick={() => setOpen(w.id)}>
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-navy-50 font-semibold text-navy-700">{w.name[0]?.toUpperCase()}</div>
             <p className="mt-3 font-medium">{w.name}</p>
-            <p className="text-xs text-slate-500">{w.workspace_members.length} membro(s) · criado {fmtDate(w.created_at)}</p>
+            <p className="text-xs text-slate-500">{plural(w.workspace_members.length, "membro", "membros")} · criado {fmtDate(w.created_at)}</p>
           </button>
         ))}
       </div>
@@ -148,7 +149,11 @@ function Members({ ws, users, onChange }: { ws: Ws; users: Profile[]; onChange: 
                 <option value="member">Membro</option>
                 <option value="admin">Administrador do espaço</option>
               </select>
-              <button className="rounded p-1 text-slate-400 hover:text-red-600" aria-label="Remover" onClick={() => run(supabase.from("workspace_members").delete().eq("workspace_id", ws.id).eq("user_id", m.user_id))}>
+              <button className="rounded p-1 text-slate-500 hover:text-red-600" aria-label={`Remover ${m.user?.full_name || m.user?.email || "membro"}`} onClick={async () => {
+                if (await confirmAction({ title: "Remover do espaço", message: `${m.user?.full_name || m.user?.email} deixa de ver os documentos de ${ws.name}. Os documentos que criou mantêm-se.`, confirmLabel: "Remover", danger: true })) {
+                  run(supabase.from("workspace_members").delete().eq("workspace_id", ws.id).eq("user_id", m.user_id));
+                }
+              }}>
                 <TrashIcon className="h-4 w-4" />
               </button>
             </li>
@@ -210,7 +215,11 @@ function Users() {
               </td>
               <td className="px-4 py-2.5">
                 <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={u.active} disabled={u.id === profile?.id} onChange={(e) => patch(u.id, { active: e.target.checked })} />
+                  <input type="checkbox" checked={u.active} disabled={u.id === profile?.id} onChange={async (e) => {
+                    const active = e.target.checked;
+                    if (!active && !(await confirmAction({ title: "Desativar utilizador", message: `${u.full_name || u.email} deixa de conseguir entrar no Signed. Os documentos que enviou continuam em curso.`, confirmLabel: "Desativar", danger: true }))) return;
+                    patch(u.id, { active });
+                  }} />
                   {u.active ? "Ativo" : "Desativado"}
                 </label>
               </td>
@@ -251,7 +260,10 @@ function Settings() {
           .update({ org_name: s.org_name, allowed_domains: d, admin_emails: split(admins), allowed_emails: split(extra), test_mode: s.test_mode, updated_at: new Date().toISOString() })
           .eq("id", 1);
         if (error) toast(errorMessage(error), "error");
-        else setSaved(true);
+        else {
+          setSaved(true);
+          setTimeout(() => setSaved(false), 4000);
+        }
       }}
     >
       <div>
@@ -390,7 +402,12 @@ function BrandSettings({ ws, onChange }: { ws: Ws; onChange: () => void }) {
                 {busy ? <Spinner className="h-4 w-4" /> : null} Carregar logótipo
                 <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(e) => { upload(e.target.files?.[0]); e.target.value = ""; }} disabled={busy} />
               </label>
-              {ws.logo_path && <button className="btn-ghost text-red-700" disabled={busy} onClick={async () => { await supabase.storage.from("branding").remove([ws.logo_path!]); await save({ logo_path: null }); }}>Remover</button>}
+              {ws.logo_path && <button className="btn-ghost text-red-700" disabled={busy} onClick={async () => {
+                if (!(await confirmAction({ title: "Remover logótipo", message: "Os emails e a página de assinatura deste espaço deixam de mostrar o logótipo.", confirmLabel: "Remover", danger: true }))) return;
+                const old = ws.logo_path!;
+                await save({ logo_path: null });
+                await supabase.storage.from("branding").remove([old]);
+              }}>Remover</button>}
             </div>
           </div>
           {(ws.brand_color || ws.logo_path) && (

@@ -6,6 +6,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../auth/AuthProvider";
 import { Alert, EmptyState, FullPageSpinner, Modal, PlusIcon, Spinner, toast } from "../components/ui";
 import { errorMessage, fmtDate, relative } from "../lib/format";
+import { confirmAction } from "../components/dialogs";
 
 export interface LinkRow {
   id: string;
@@ -47,7 +48,7 @@ export function PublicLinks() {
   }
 
   async function remove(r: LinkRow) {
-    if (!confirm(`Apagar o link «${r.title}»? Quem tiver o link ou o QR deixa de conseguir usá-lo. Os documentos já assinados mantêm-se.`)) return;
+    if (!(await confirmAction({ title: "Apagar link público", message: `Quem tiver o link ou o QR de «${r.title}» deixa de conseguir usá-lo. Os documentos já criados mantêm-se.`, confirmLabel: "Apagar", danger: true }))) return;
     const { error } = await supabase.from("public_links").delete().eq("id", r.id);
     if (error) toast(errorMessage(error), "error");
     else load();

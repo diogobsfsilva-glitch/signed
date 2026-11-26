@@ -21,3 +21,6 @@ export function errorMessage(e: unknown): string {
   if (e && typeof e === "object" && "message" in e) return String((e as { message: string }).message);
   return "Ocorreu um erro.";
 }
+
+/** "1 campo", "3 campos". */
+export const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;

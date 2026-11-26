@@ -24,7 +24,7 @@ export function BrandMark({ brand }: { brand?: BrandInfo | null }) {
       ) : (
         <span className="truncate text-lg font-semibold" style={{ color: brand.color ?? undefined }}>{brand.name}</span>
       )}
-      <span className="hidden text-[11px] text-slate-400 sm:inline">via Signed</span>
+      <span className="hidden text-[11px] text-slate-500 sm:inline">via Signed</span>
     </div>
   );
 }

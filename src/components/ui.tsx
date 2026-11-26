@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useT } from "../lib/signer-i18n";
 import type { DocStatus, RecipientStatus } from "../../supabase/functions/_shared/types";
 import { RECIPIENT_STATUS_LABELS, STATUS_LABELS } from "../../supabase/functions/_shared/types";
 
@@ -61,25 +62,54 @@ export function ModeBadge({ mode }: { mode: "simple" | "qualified" }) {
 }
 
 export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
+  const box = useRef<HTMLDivElement>(null);
+  const { t } = useT();
+  // onClose costuma ser uma função nova a cada render: guardada numa ref para o efeito só correr ao abrir/fechar.
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // Foco: entra na janela, fica preso nela (Tab) e volta ao elemento anterior ao fechar.
+    const before = document.activeElement as HTMLElement | null;
+    const focusables = () =>
+      [...(box.current?.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])];
+    if (!box.current?.contains(document.activeElement)) (focusables().find((el) => el.tagName !== "BUTTON" || !el.ariaLabel) ?? box.current)?.focus();
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") return close.current();
+      if (e.key !== "Tab") return;
+      const els = focusables();
+      if (!els.length) return;
+      const first = els[0];
+      const last = els[els.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, [open, onClose]);
+    return () => {
+      window.removeEventListener("keydown", h);
+      before?.focus?.();
+    };
+  }, [open]);
   if (!open) return null;
+  // Clicar fora não fecha: evita perder um formulário preenchido ou uma assinatura desenhada.
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-4" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-4">
       <div
+        ref={box}
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`max-h-[92vh] w-full overflow-auto rounded-t-2xl bg-white shadow-xl sm:rounded-2xl ${wide ? "sm:max-w-2xl" : "sm:max-w-md"}`}
-        onMouseDown={(e) => e.stopPropagation()}
+        tabIndex={-1}
+        className={`max-h-[92vh] w-full overflow-auto rounded-t-2xl bg-white shadow-xl outline-none sm:rounded-2xl ${wide ? "sm:max-w-2xl" : "sm:max-w-md"}`}
       >
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
           <h2 className="text-base font-semibold">{title}</h2>
-          <button className="btn-ghost -mr-2 px-2 py-1" onClick={onClose} aria-label="Fechar">
+          <button className="btn-ghost -mr-2 px-2 py-1" onClick={onClose} aria-label={t("close")}>
             ✕
           </button>
         </div>
